@@ -2,383 +2,117 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
 <title>EVOLV</title>
-<meta name="theme-color" content="#080810">
+<meta name="theme-color" content="#0E1015">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="EVOLV">
 <link rel="apple-touch-icon" href="icon.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="evolv-styles.css">
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 <!-- Chart.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<style>
-:root{
-  --bg:#080810;--bg2:#0d0d1a;--card:#111120;--card2:#171730;--border:rgba(255,255,255,0.07);
-  --green:#00e676;--green2:#00b04a;--green-dim:rgba(0,230,118,0.1);--green-glow:rgba(0,230,118,0.2);
-  --text:#f0f0fa;--t2:#8080a0;--t3:#404060;--red:#ff4458;--orange:#ff8c00;
-  --nav:68px;--hdr:58px;--st:env(safe-area-inset-top,0px);--sb:env(safe-area-inset-bottom,0px);
-}
-*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;-webkit-font-smoothing:antialiased}
-::-webkit-scrollbar{width:0}
-
-/* LOADING */
-#loading{
-  position:fixed;inset:0;background:var(--bg);z-index:999;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px
-}
-#loading img{width:72px;height:72px;border-radius:16px;animation:pulse 1.4s ease-in-out infinite}
-#loading .spin{width:28px;height:28px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
-#loading .ltd{font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:3px;color:var(--t3)}
-@keyframes pulse{0%,100%{opacity:.6;transform:scale(.97)}50%{opacity:1;transform:scale(1)}}
-@keyframes spin{to{transform:rotate(360deg)}}
-
-/* SETUP SCREEN */
-#fbsetup{
-  position:fixed;inset:0;background:var(--bg);z-index:998;
-  display:none;flex-direction:column;align-items:center;justify-content:center;
-  padding:24px;overflow-y:auto
-}
-#fbsetup.open{display:flex}
-#fbsetup .setup-box{width:100%;max-width:420px;text-align:center}
-#fbsetup .setup-box textarea{
-  width:100%;min-height:130px;resize:vertical;background:var(--card2);border:1px solid var(--border);
-  border-radius:12px;color:var(--text);font-family:'Barlow',sans-serif;font-size:12px;
-  padding:12px;outline:none;margin-bottom:10px;
-}
-#fbsetup .setup-box textarea:focus{border-color:var(--green)}
-.fb-steps{text-align:left;background:var(--card);border-radius:12px;padding:14px;margin-bottom:18px}
-.fb-steps li{font-size:12px;color:var(--t2);padding:3px 0 3px 16px;position:relative;list-style:none}
-.fb-steps li::before{content:'→';position:absolute;left:0;color:var(--green)}
-
-/* APP LAYOUT */
-#app{width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden}
-#hdr{
-  height:calc(var(--hdr) + var(--st));padding-top:var(--st);
-  background:var(--bg);border-bottom:1px solid var(--border);
-  display:flex;align-items:flex-end;padding-bottom:0;padding-left:16px;padding-right:16px;
-  flex-shrink:0;z-index:10;position:relative
-}
-#hdr-inner{display:flex;align-items:center;width:100%;height:var(--hdr);gap:10px}
-.logo{display:flex;align-items:center;gap:9px;flex:1}
-.logo-text{font-family:'Bebas Neue',sans-serif;font-size:23px;letter-spacing:4px}
-.hdr-right{display:flex;gap:8px;align-items:center}
-.status-dot{
-  width:7px;height:7px;border-radius:50%;background:var(--green);
-  transition:background .4s;flex-shrink:0
-}
-.status-dot.off{background:var(--red)}
-
-#pages{flex:1;overflow:hidden;position:relative}
-.page{
-  position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;
-  padding:16px 16px calc(var(--nav) + var(--sb) + 16px);display:none;
-  -webkit-overflow-scrolling:touch
-}
-.page.active{display:block}
-
-#nav{
-  height:calc(var(--nav) + var(--sb));padding-bottom:var(--sb);
-  background:var(--bg2);border-top:1px solid var(--border);
-  display:flex;align-items:flex-start;flex-shrink:0;z-index:10
-}
-.ni{
-  flex:1;height:var(--nav);display:flex;flex-direction:column;align-items:center;
-  justify-content:center;gap:4px;cursor:pointer;color:var(--t3);transition:color .2s;
-  user-select:none;position:relative
-}
-.ni.active{color:var(--green)}
-.ni svg{width:22px;height:22px;stroke-width:1.75}
-.ni span{font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase}
-.ni.active::after{
-  content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);
-  width:24px;height:2px;background:var(--green);border-radius:0 0 2px 2px
-}
-
-/* COMPONENTS */
-.card{background:var(--card);border-radius:16px;border:1px solid var(--border);padding:16px;margin-bottom:12px}
-.card.glow{border-color:rgba(0,230,118,.4);box-shadow:0 0 24px var(--green-glow)}
-.stitle{font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:3px;color:var(--t3);margin:16px 0 10px}
-.stitle:first-child{margin-top:4px}
-
-.srow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
-.sc{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px 10px}
-.sc .si{margin-bottom:6px;color:var(--green);display:flex}
-.sc .sl{font-size:9px;color:var(--t3);font-weight:700;letter-spacing:1px;text-transform:uppercase}
-.sc .sv{font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:.5px;line-height:1.1}
-.sc .ss{font-size:10px;color:var(--green);font-weight:600;margin-top:1px}
-
-.btn{
-  display:inline-flex;align-items:center;justify-content:center;gap:8px;
-  height:48px;padding:0 22px;border:none;border-radius:12px;
-  font-family:'Barlow',sans-serif;font-weight:700;font-size:13px;letter-spacing:.8px;
-  cursor:pointer;transition:transform .12s,opacity .12s;width:100%
-}
-.btn:active{transform:scale(.96)}
-.bp{background:linear-gradient(135deg,var(--green),var(--green2));color:#000}
-.bs{background:var(--card2);color:var(--text);border:1px solid var(--border)}
-.bg{background:transparent;color:var(--t2);border:1px solid var(--border)}
-.bd{background:rgba(255,68,88,.12);color:var(--red);border:1px solid rgba(255,68,88,.25)}
-.btn.sm{height:36px;padding:0 14px;font-size:12px;border-radius:9px}
-
-input,select,textarea{
-  background:var(--card2);border:1px solid var(--border);border-radius:10px;
-  color:var(--text);font-family:'Barlow',sans-serif;font-size:14px;font-weight:500;
-  padding:11px 13px;width:100%;outline:none;transition:border-color .18s;-webkit-appearance:none
-}
-input:focus,select:focus,textarea:focus{border-color:var(--green);box-shadow:0 0 0 3px var(--green-dim)}
-input::placeholder,textarea::placeholder{color:var(--t3)}
-input[type=date]{color-scheme:dark}
-.ig{display:flex;flex-direction:column;gap:5px;margin-bottom:11px}
-.ig label{font-size:11px;color:var(--t2);font-weight:600;letter-spacing:.5px}
-
-.ibtn{
-  width:36px;height:36px;border:none;background:var(--card2);border-radius:9px;
-  display:flex;align-items:center;justify-content:center;cursor:pointer;
-  color:var(--t2);transition:all .12s;flex-shrink:0
-}
-.ibtn:active{transform:scale(.9)}
-
-/* MODAL */
-.mo{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;display:flex;align-items:flex-end;backdrop-filter:blur(6px);animation:mfade .2s ease}
-@keyframes mfade{from{opacity:0}to{opacity:1}}
-.md{width:100%;background:var(--bg2);border-radius:22px 22px 0 0;border-top:1px solid var(--border);padding:6px 18px calc(var(--sb) + 18px);max-height:92vh;overflow-y:auto;animation:mslide .28s cubic-bezier(.32,.72,0,1)}
-@keyframes mslide{from{transform:translateY(100%)}to{transform:translateY(0)}}
-.mhandle{width:34px;height:3px;background:var(--border);border-radius:2px;margin:8px auto 14px}
-.mtitle{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:2px;margin-bottom:18px}
-
-/* HERO */
-.hero{
-  background:linear-gradient(135deg,#0c1520 0%,#0d1c10 100%);
-  border:1px solid var(--border);border-radius:20px;padding:20px;margin-bottom:12px;
-  position:relative;overflow:hidden
-}
-.hero::before{content:'';position:absolute;right:-20px;top:-20px;width:160px;height:160px;background:radial-gradient(circle,var(--green-glow) 0%,transparent 70%);pointer-events:none}
-.hero .hg{font-size:12px;color:var(--t2);margin-bottom:3px;font-weight:500;display:flex;align-items:center;gap:6px}
-.hero .ht{font-family:'Bebas Neue',sans-serif;font-size:30px;letter-spacing:2px;margin-bottom:16px;line-height:1.15}
-.hero .ht em{color:var(--green);font-style:normal}
-
-/* WORKOUT ITEM */
-.wi{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:9px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:all .12s;position:relative;overflow:hidden}
-.wi::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(to bottom,var(--green),var(--green2))}
-.wi:active{transform:scale(.98);background:var(--card2)}
-.wi-ico{width:42px;height:42px;border-radius:11px;background:var(--green-dim);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--green)}
-.wi-info{flex:1;min-width:0}
-.wi-name{font-weight:700;font-size:14px;margin-bottom:2px}
-.wi-sub{font-size:11px;color:var(--t3)}
-
-/* TIMER */
-.tring-wrap{position:relative;width:230px;height:230px;margin:0 auto}
-.tring-svg{width:230px;height:230px;transform:rotate(-90deg)}
-.tring-bg{fill:none;stroke:var(--card2);stroke-width:10}
-.tring-prog{fill:none;stroke-width:10;stroke-linecap:round}
-.ttime{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center}
-.ttime .tn{font-family:'Bebas Neue',sans-serif;font-size:56px;line-height:1;letter-spacing:2px}
-.ttime .tl{font-size:10px;color:var(--t3);letter-spacing:2.5px;text-transform:uppercase;margin-top:2px}
-.tpresets{display:flex;gap:7px;flex-wrap:wrap;justify-content:center;margin:18px 0 14px}
-.tp{height:33px;padding:0 14px;border:1px solid var(--border);background:var(--card);color:var(--t2);border-radius:20px;font-family:'Barlow',sans-serif;font-weight:600;font-size:12px;cursor:pointer;transition:all .12s}
-.tp.on,.tp:active{border-color:var(--green);color:var(--green);background:var(--green-dim)}
-.tctrls{display:flex;gap:14px;justify-content:center;align-items:center;margin-top:10px}
-.tcbtn{border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .12s}
-.tcbtn:active{transform:scale(.9)}
-.tcbtn.play{width:72px;height:72px;background:linear-gradient(135deg,var(--green),var(--green2));color:#000;box-shadow:0 4px 28px var(--green-glow)}
-.tcbtn.rst{width:52px;height:52px;background:var(--card);color:var(--t2);border:1px solid var(--border)}
-
-/* SERIES COUNTER */
-.sc-wrap{text-align:center;padding:16px 0}
-.sc-num{font-family:'Bebas Neue',sans-serif;font-size:112px;line-height:1;color:var(--text);transition:transform .15s,color .15s;display:inline-block}
-.sc-num.bump{transform:scale(1.18)!important}
-.sc-lbl{font-size:10px;color:var(--t3);letter-spacing:2.5px;text-transform:uppercase;margin-top:2px}
-.sc-btns{display:flex;gap:14px;justify-content:center;margin-top:20px;align-items:center}
-.scbtn{border-radius:50%;border:none;cursor:pointer;transition:transform .12s;display:flex;align-items:center;justify-content:center}
-.scbtn:active{transform:scale(.9)}
-.scbtn.plus{width:80px;height:80px;background:linear-gradient(135deg,var(--green),var(--green2));color:#000;box-shadow:0 4px 28px var(--green-glow)}
-.scbtn.minus{width:58px;height:58px;background:var(--card);color:var(--t2);border:1px solid var(--border)}
-
-/* ACTIVE WORKOUT */
-#aw{position:fixed;inset:0;background:var(--bg);z-index:200;display:none;flex-direction:column;overflow:hidden}
-#aw.open{display:flex}
-.aw-hdr{padding:calc(var(--st) + 14px) 18px 14px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);flex-shrink:0}
-.aw-title{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:1px}
-.aw-sub{font-size:11px;color:var(--t3)}
-.aw-timer{font-family:'Bebas Neue',sans-serif;font-size:24px;color:var(--green);flex-shrink:0}
-.pbar-wrap{height:3px;background:var(--card2);flex-shrink:0}
-.pbar{height:3px;background:linear-gradient(to right,var(--green),var(--green2));transition:width .4s ease}
-.aw-body{flex:1;overflow-y:auto;padding:14px;-webkit-overflow-scrolling:touch}
-.aw-ftr{padding:14px 14px calc(var(--sb) + 14px);border-top:1px solid var(--border);display:flex;gap:9px;flex-shrink:0}
-
-.ex-card{background:var(--card);border-radius:14px;border:1px solid var(--border);padding:14px;margin-bottom:10px}
-.ex-card.glow{border-color:rgba(0,230,118,.35);box-shadow:0 0 18px var(--green-glow)}
-.ex-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-.ex-name{font-weight:700;font-size:15px}
-.ex-tag{font-size:10px;padding:3px 8px;border-radius:6px;background:var(--green-dim);color:var(--green);font-weight:700;letter-spacing:.5px}
-.sets-hdr{display:grid;grid-template-columns:26px 1fr 1fr 34px;gap:7px;margin-bottom:6px}
-.sets-hdr span{font-size:10px;color:var(--t3);font-weight:700;letter-spacing:.5px}
-.set-row{display:grid;grid-template-columns:26px 1fr 1fr 34px;gap:7px;margin-bottom:7px;align-items:center}
-.set-row .sn{font-size:11px;color:var(--t3);font-weight:700;text-align:center}
-.set-row input{height:36px;padding:0 8px;font-size:14px;font-weight:600;text-align:center}
-.set-chk{width:34px;height:34px;border-radius:8px;border:1px solid var(--border);background:var(--card2);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;flex-shrink:0;color:transparent}
-.set-chk.done{background:var(--green);border-color:var(--green);color:#000}
-
-/* WEIGHT HISTORY */
-.prow{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--border)}
-.prow:last-child{border-bottom:none}
-.pdate{flex:1}
-.pd1{font-size:13px;font-weight:600}
-.pd2{font-size:10px;color:var(--t3)}
-.pval{font-family:'Bebas Neue',sans-serif;font-size:24px;letter-spacing:.5px}
-.pdif{font-size:11px;font-weight:700;min-width:36px;text-align:right}
-.pdif.up{color:var(--red)}.pdif.dn{color:var(--green)}.pdif.eq{color:var(--t3)}
-.del{width:30px;height:30px;border:none;background:rgba(255,68,88,.1);color:var(--red);border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .12s}
-.del:active{transform:scale(.88)}
-
-/* CHARTS */
-.cwrap{position:relative;height:170px;margin:10px 0 4px}
-
-/* EMPTY */
-.empty{text-align:center;padding:44px 20px;color:var(--t3)}
-.empty .ei{margin-bottom:12px;display:flex;justify-content:center;color:var(--t3);opacity:.5}
-.empty .et{font-size:15px;font-weight:700;color:var(--t2);margin-bottom:5px}
-.empty .es{font-size:12px;line-height:1.5}
-
-/* TOAST */
-.toast{
-  position:fixed;bottom:calc(var(--nav) + var(--sb) + 14px);left:50%;
-  transform:translateX(-50%);background:var(--card2);border:1px solid var(--border);
-  border-radius:11px;padding:11px 18px;font-size:13px;font-weight:600;z-index:500;
-  animation:tin .25s ease,tout .25s ease 2.2s forwards;white-space:nowrap;
-  box-shadow:0 8px 32px rgba(0,0,0,.5);display:flex;align-items:center;gap:8px
-}
-@keyframes tin{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
-@keyframes tout{to{opacity:0;transform:translateX(-50%) translateY(8px)}}
-
-/* FICHA CARD */
-.fc{background:var(--card);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-bottom:10px}
-.fc-head{padding:14px 16px;display:flex;align-items:center;gap:10px}
-.fc-title{font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:1.5px;flex:1}
-.fc-sub{font-size:11px;color:var(--t3)}
-.fc-day{border-top:1px solid var(--border);padding:11px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;transition:background .12s}
-.fc-day:active{background:var(--card2)}
-.fc-dn{width:28px;height:28px;border-radius:7px;background:var(--green-dim);display:flex;align-items:center;justify-content:center;font-family:'Bebas Neue',sans-serif;font-size:14px;color:var(--green);flex-shrink:0}
-.fc-di{flex:1;min-width:0}
-.fc-dn2{font-weight:600;font-size:13px}
-.fc-ds{font-size:10px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-
-/* DAY BLOCK */
-.db{background:var(--card2);border-radius:12px;padding:13px;margin-bottom:12px}
-.db-hdr{display:flex;align-items:center;gap:8px;margin-bottom:10px}
-.db-lbl{font-family:'Bebas Neue',sans-serif;font-size:13px;color:var(--green);white-space:nowrap;letter-spacing:1px}
-.ex-row{display:grid;grid-template-columns:1fr 46px 46px 28px;gap:5px;margin-bottom:7px;align-items:center}
-.ex-row input{height:34px;font-size:12px;padding:0 8px}
-
-/* SEGMENT */
-.seg{display:flex;background:var(--card2);border-radius:10px;padding:3px;margin-bottom:16px}
-.seg-btn{flex:1;height:34px;border:none;border-radius:8px;cursor:pointer;font-family:'Barlow',sans-serif;font-weight:600;font-size:12px;letter-spacing:.5px;color:var(--t2);background:transparent;transition:all .15s}
-.seg-btn.on{background:var(--card);color:var(--text)}
-</style>
 </head>
 <body>
 
-<!-- LOADING SCREEN -->
+<!-- LOADING -->
 <div id="loading">
-  <img src="logo.png" alt="EVOLV">
+  <div class="logo-mark plain">
+    <img src="logo.png" alt="EVOLV">
+  </div>
   <div class="spin"></div>
-  <div class="ltd">CARREGANDO</div>
+  <div class="ltd">Carregando</div>
+  <div class="ltx">Preparando seu app</div>
 </div>
 
 <!-- FIREBASE SETUP -->
 <div id="fbsetup">
   <div class="setup-box">
-    <img src="logo.png" style="width:64px;height:64px;border-radius:16px;margin-bottom:16px">
+    <div class="logo-mark" style="margin:0 auto 16px;width:56px;height:56px;border-radius:16px">
+      <img src="logo.png" alt="EVOLV">
+    </div>
     <div class="mtitle" style="text-align:center;margin-bottom:6px">Configurar Firebase</div>
-    <p style="color:var(--t2);font-size:13px;margin-bottom:18px;line-height:1.6">
+    <p style="color:var(--t1);font-size:13.5px;margin-bottom:18px;line-height:1.55">
       Para sincronizar seus dados na nuvem, cole abaixo o objeto de configuração do Firebase.
     </p>
     <ul class="fb-steps">
-      <li>Acesse <strong style="color:var(--text)">console.firebase.google.com</strong></li>
+      <li>Acesse <strong>console.firebase.google.com</strong></li>
       <li>Crie um projeto e adicione um app Web</li>
-      <li>Ative <strong style="color:var(--text)">Authentication → Provedores → Anônimo</strong></li>
-      <li>Ative <strong style="color:var(--text)">Firestore Database</strong></li>
-      <li>Copie o objeto <code style="color:var(--green)">firebaseConfig</code> e cole abaixo</li>
+      <li>Ative <strong>Authentication → Anônimo</strong></li>
+      <li>Ative <strong>Realtime Database</strong></li>
+      <li>Copie o objeto <code style="color:var(--green);font-family:var(--mono)">firebaseConfig</code> e cole abaixo</li>
     </ul>
-    <textarea id="fb-cfg-input" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
-    <button class="btn bp" onclick="App.saveFBConfig()" style="margin-bottom:8px">CONECTAR AO FIREBASE</button>
+    <textarea id="fb-cfg-input" placeholder='{"apiKey":"...","authDomain":"...","databaseURL":"https://<your-project>.firebaseio.com","projectId":"...","appId":"..."}'></textarea>
+    <button class="btn bp" onclick="App.saveFBConfig()" style="margin-bottom:8px">Conectar ao Firebase</button>
     <button class="btn bg" onclick="App.skipFBSetup()">Usar somente offline</button>
   </div>
 </div>
 
 <!-- MAIN APP -->
 <div id="app" style="display:none">
+
   <!-- HEADER -->
-  <div id="hdr">
-    <div id="hdr-inner">
-      <div class="logo">
-        <img src="logo.png" alt="EVOLV" style="width:36px;height:36px;border-radius:9px;object-fit:cover;">
-        <span class="logo-text">EVOLV</span>
+  <header id="hdr">
+    <div class="logo">
+      <div class="logo-mark plain">
+        <img src="logo.png" alt="EVOLV">
       </div>
-      <div class="hdr-right">
-        <div class="status-dot" id="status-dot" title="Online"></div>
-      </div>
+      <span class="logo-text">EVOLV</span>
     </div>
-  </div>
+    <div class="hdr-right">
+      <button class="icon-btn" id="notify-btn" aria-label="Notificações" onclick="App.showNotifications()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        <span class="notify-badge" id="notify-badge"></span>
+      </button>
+      <div class="status-dot" id="status-dot" title="Online"></div>
+    </div>
+  </header>
 
   <!-- PAGES -->
-  <div id="pages">
+  <main id="pages">
     <!-- HOME -->
-    <div class="page active" id="pg-home">
-      <div class="hero">
-        <div class="hg" id="hero-greet"></div>
-        <div class="ht">Sua evolução <em>começa aqui.</em></div>
-        <button class="btn bp" onclick="App.startTodayWorkout()">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-          INICIAR TREINO
-        </button>
-      </div>
-      <div class="srow" id="home-stats"></div>
-      <div class="stitle">ÚLTIMOS TREINOS</div>
-      <div id="home-recent"></div>
-    </div>
+    <section class="page active" id="pg-home"></section>
 
     <!-- FICHAS -->
-    <div class="page" id="pg-fichas">
-      <div id="fichas-list"></div>
-      <button class="btn bp" onclick="App.showAddFicha()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        NOVA FICHA
-      </button>
-    </div>
+    <section class="page" id="pg-fichas"></section>
 
-    <!-- TIMER + SÉRIES -->
-    <div class="page" id="pg-timer">
+    <!-- TIMER -->
+    <section class="page" id="pg-timer">
       <div class="seg">
         <button class="seg-btn on" onclick="App.showTimerTab(0)">Intervalo</button>
         <button class="seg-btn" onclick="App.showTimerTab(1)">Séries</button>
       </div>
+
       <div id="tab-interval">
         <div class="card">
           <div class="tring-wrap">
-            <svg class="tring-svg" viewBox="0 0 230 230">
+            <svg class="tring-svg" viewBox="0 0 280 280">
               <defs>
-                <linearGradient id="tg" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="#00e676"/>
-                  <stop offset="100%" stop-color="#00b04a"/>
+                <linearGradient id="tg" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#1FE07A"/>
+                  <stop offset="100%" stop-color="#15B863"/>
                 </linearGradient>
               </defs>
-              <circle class="tring-bg" cx="115" cy="115" r="103"/>
-              <circle id="tring" class="tring-prog" cx="115" cy="115" r="103"
-                stroke="url(#tg)" stroke-dasharray="647.08" stroke-dashoffset="0"/>
+              <!-- track -->
+              <circle cx="140" cy="140" r="126" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="14"/>
+              <!-- progress -->
+              <circle id="tring" cx="140" cy="140" r="126" fill="none"
+                stroke="url(#tg)" stroke-width="14" stroke-linecap="round"
+                stroke-dasharray="791.68" stroke-dashoffset="0"
+                transform="rotate(-90 140 140)"/>
+              <!-- tick marks -->
+              <g id="tring-ticks"></g>
             </svg>
             <div class="ttime">
               <div class="tn" id="tdisplay">01:30</div>
-              <div class="tl" id="tstatus">PRONTO</div>
+              <div class="tl" id="tstatus">Pronto</div>
             </div>
           </div>
+
           <div class="tpresets">
             <button class="tp" onclick="App.setPreset(30)">30s</button>
             <button class="tp" onclick="App.setPreset(45)">45s</button>
@@ -386,95 +120,76 @@ input[type=date]{color-scheme:dark}
             <button class="tp" onclick="App.setPreset(120)">2min</button>
             <button class="tp" onclick="App.setPreset(180)">3min</button>
           </div>
-          <div style="display:flex;gap:8px;justify-content:center;margin-bottom:16px">
-            <input type="number" id="cmin" placeholder="min" style="width:78px;text-align:center" min="0" max="59" value="1" oninput="App.setCustomTime()">
-            <span style="line-height:44px;color:var(--t3);font-weight:700">:</span>
-            <input type="number" id="csec" placeholder="seg" style="width:78px;text-align:center" min="0" max="59" value="30" oninput="App.setCustomTime()">
+
+          <div class="tcustom">
+            <input type="number" id="cmin" placeholder="min" min="0" max="59" value="1" oninput="App.setCustomTime()">
+            <span class="colon">:</span>
+            <input type="number" id="csec" placeholder="seg" min="0" max="59" value="30" oninput="App.setCustomTime()">
           </div>
+
           <div class="tctrls">
-            <button class="tcbtn rst" onclick="App.resetTimer()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.34"/></svg>
+            <button class="tcbtn rst" onclick="App.resetTimer()" aria-label="Reset">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/></svg>
             </button>
-            <button class="tcbtn play" id="tplaybtn" onclick="App.toggleTimer()">
-              <svg id="tplayico" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+            <button class="tcbtn play" id="tplaybtn" onclick="App.toggleTimer()" aria-label="Play/Pause">
+              <svg id="tplayico" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5.5c0-1.1 1.2-1.8 2.2-1.2l11 6.5c.9.6.9 2 0 2.5l-11 6.5c-1 .6-2.2-.1-2.2-1.2z"/></svg>
+            </button>
+            <button class="tcbtn rst" onclick="App.bumpTimer(15)" aria-label="+15s">
+              <span style="font-family:var(--mono);font-weight:700;font-size:13px">+15</span>
             </button>
           </div>
         </div>
       </div>
+
       <div id="tab-series" style="display:none">
         <div class="card">
-          <div style="font-family:'Bebas Neue',sans-serif;font-size:11px;letter-spacing:2.5px;color:var(--t3);text-align:center;margin-bottom:4px">SÉRIES REALIZADAS</div>
+          <div class="eyebrow" style="text-align:center">Séries realizadas</div>
           <div class="sc-wrap">
             <div class="sc-num" id="sc-num">0</div>
             <div class="sc-lbl">séries</div>
           </div>
           <div class="sc-btns">
-            <button class="scbtn minus" onclick="App.addSeries(-1)">
+            <button class="scbtn minus" onclick="App.addSeries(-1)" aria-label="-1">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
             </button>
-            <button class="scbtn plus" onclick="App.addSeries(1)">
+            <button class="scbtn plus" onclick="App.addSeries(1)" aria-label="+1">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             </button>
           </div>
-          <div style="margin-top:20px">
+          <div style="margin-top:24px">
             <button class="btn bg sm" onclick="App.resetSeries()" style="width:100%">Zerar contador</button>
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
     <!-- ESTATÍSTICAS -->
-    <div class="page" id="pg-stats"><div id="stats-content"></div></div>
+    <section class="page" id="pg-stats"><div id="stats-content"></div></section>
 
     <!-- PESAGEM -->
-    <div class="page" id="pg-peso">
-      <div class="card">
-        <div class="stitle" style="margin-top:0">REGISTRAR PESO</div>
-        <div class="ig"><label>Peso (kg)</label><input type="number" id="p-weight" placeholder="ex: 82.5" step="0.1" min="30" max="300"></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
-          <div class="ig"><label>Data</label><input type="date" id="p-date"></div>
-          <div class="ig"><label>Período</label>
-            <select id="p-period">
-              <option value="">Geral</option>
-              <option value="Manhã">Manhã</option>
-              <option value="Noite">Noite</option>
-              <option value="Jejum">Jejum</option>
-              <option value="Pós-treino">Pós-treino</option>
-            </select>
-          </div>
-        </div>
-        <div class="ig"><label>Obs (opcional)</label><input type="text" id="p-obs" placeholder="Anotação livre..."></div>
-        <button class="btn bp" onclick="App.savePeso()">SALVAR PESAGEM</button>
-      </div>
-      <div class="card">
-        <div class="stitle" style="margin-top:0">EVOLUÇÃO DO PESO</div>
-        <div class="cwrap"><canvas id="peso-chart"></canvas></div>
-      </div>
-      <div class="stitle">HISTÓRICO</div>
-      <div class="card"><div id="peso-hist"></div></div>
-    </div>
-  </div>
+    <section class="page" id="pg-peso"><div id="peso-content"></div></section>
+  </main>
 
   <!-- BOTTOM NAV -->
   <nav id="nav">
-    <div class="ni active" data-p="home" onclick="App.nav('home')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-      <span>Home</span>
-    </div>
-    <div class="ni" data-p="fichas" onclick="App.nav('fichas')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="12" y2="15"/></svg>
-      <span>Fichas</span>
-    </div>
     <div class="ni" data-p="timer" onclick="App.nav('timer')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2.5"/></svg>
       <span>Timer</span>
     </div>
+    <div class="ni" data-p="fichas" onclick="App.nav('fichas')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1.2"/><circle cx="3.5" cy="12" r="1.2"/><circle cx="3.5" cy="18" r="1.2"/></svg>
+      <span>Fichas</span>
+    </div>
+    <div class="ni active" data-p="home" onclick="App.nav('home')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1z"/></svg>
+      <span>Home</span>
+    </div>
     <div class="ni" data-p="stats" onclick="App.nav('stats')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
       <span>Stats</span>
     </div>
     <div class="ni" data-p="peso" onclick="App.nav('peso')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M5 8h14l-3 8a4 4 0 0 1-8 0z"/><circle cx="12" cy="4" r="1.4"/></svg>
       <span>Peso</span>
     </div>
   </nav>
@@ -483,8 +198,8 @@ input[type=date]{color-scheme:dark}
 <!-- ACTIVE WORKOUT OVERLAY -->
 <div id="aw">
   <div class="aw-hdr">
-    <button class="ibtn" onclick="App.cancelWorkout()" style="background:rgba(255,68,88,.12);color:var(--red)">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    <button class="icon-btn danger" onclick="App.cancelWorkout()" aria-label="Fechar">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
     <div style="flex:1;min-width:0">
       <div class="aw-title" id="aw-title">Treino</div>
@@ -496,613 +211,15 @@ input[type=date]{color-scheme:dark}
   <div class="aw-body" id="aw-body"></div>
   <div class="aw-ftr">
     <button class="btn bp" onclick="App.finishWorkout()" style="flex:1">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-      FINALIZAR TREINO
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg>
+      Finalizar treino
     </button>
   </div>
 </div>
 
 <div id="mroot"></div>
+<input type="file" accept="application/json" id="import-file-input" style="display:none" onchange="App.handleImportFile(event)">
 
-<script>
-// ══════════════════════════════════════════════════════════
-//  FIREBASE CONFIG
-//  Preencha com seus dados, ou o app irá perguntar no 1º acesso
-//  Regras Firestore recomendadas:
-//  rules_version = '2';
-//  service cloud.firestore {
-//    match /databases/{database}/documents {
-//      match /users/{uid}/{document=**} {
-//        allow read, write: if request.auth != null && request.auth.uid == uid;
-//      }
-//    }
-//  }
-// ══════════════════════════════════════════════════════════
-const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyCvwm5Abo4sL0WTGcUdIBPUj4qUSDtO4J8",
-  authDomain: "evolv-82ec2.firebaseapp.com",
-  projectId: "evolv-82ec2",
-  storageBucket: "evolv-82ec2.firebasestorage.app",
-  messagingSenderId: "934840298557",
-  appId: "1:934840298557:web:8f79f024e8e2d8ce6a0e54",
-  measurementId: "G-E27HHXWXPX"
-};
-
-// ══════════════════════════════════════════════════════════
-//  ICONS  — SVG inline, 24x24 viewport, stroke=currentColor
-// ══════════════════════════════════════════════════════════
-const IC = {
-  _s:(p,s=20)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`,
-  activity:(s=20)=>IC._s('<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',s),
-  layers:(s=20)=>IC._s('<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',s),
-  scale:(s=20)=>IC._s('<path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/>',s),
-  trophy:(s=20)=>IC._s('<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"/>',s),
-  flame:(s=20)=>IC._s('<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',s),
-  trendUp:(s=20)=>IC._s('<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',s),
-  sun:(s=18)=>IC._s('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',s),
-  moon:(s=18)=>IC._s('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',s),
-  zap:(s=18)=>IC._s('<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',s),
-  clipboard:(s=20)=>IC._s('<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/>',s),
-  check:(s=16)=>IC._s('<polyline points="20 6 9 17 4 12"/>',s),
-  trash:(s=14)=>IC._s('<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',s),
-  edit:(s=14)=>IC._s('<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4z"/>',s),
-  close:(s=16)=>IC._s('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',s),
-  cloud:(s=16)=>IC._s('<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>',s),
-  nocloud:(s=16)=>IC._s('<path d="m2 2 20 20"/><path d="M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.26A8 8 0 0 0 5.002 7.7"/>',s),
-};
-
-// ══════════════════════════════════════════════════════════
-//  DB — Firebase Firestore + localStorage fallback
-// ══════════════════════════════════════════════════════════
-const DB = {
-  cache:{fichas:[],sessoes:[],pesos:[]},
-  ready:false, _local:false, _db:null, _uid:null,
-  _loadCount:0, _resolveReady:null,
-
-  whenReady: new Promise(r => { DB._resolveReady = r; }),
-
-  async init(){
-    // Decide which config to use
-    let cfg = FIREBASE_CONFIG;
-    if(!cfg.apiKey){
-      const saved = localStorage.getItem('evolv_fbcfg');
-      if(saved) try { cfg = JSON.parse(saved); } catch{}
-    }
-    if(!cfg.apiKey || localStorage.getItem('evolv_offline')==='1'){
-      App.showFBSetup(!cfg.apiKey);
-      return;
-    }
-
-    try{
-      firebase.initializeApp(cfg);
-      DB._db = firebase.firestore();
-      await DB._db.enablePersistence({synchronizeTabs:true}).catch(()=>{});
-
-      const cred = await firebase.auth().signInAnonymously();
-      DB._uid = cred.user.uid;
-
-      DB._listen('fichas');
-      DB._listen('sessoes');
-      DB._listen('pesos');
-
-      window.addEventListener('online',  ()=>{ DB._online=true;  App.updateDot(); });
-      window.addEventListener('offline', ()=>{ DB._online=false; App.updateDot(); });
-      DB._online = navigator.onLine;
-
-    } catch(e){
-      console.warn('Firebase falhou, usando offline:', e);
-      DB._fallback();
-    }
-  },
-
-  _col(n){ return DB._db.collection('users').doc(DB._uid).collection(n); },
-
-  _listen(name){
-    DB._col(name).onSnapshot(snap=>{
-      DB.cache[name] = snap.docs.map(d=>({id:d.id,...d.data()}));
-      if(name==='pesos') DB.cache.pesos.sort((a,b)=>a.date.localeCompare(b.date));
-      if(name==='sessoes') DB.cache.sessoes.sort((a,b)=>a.date.localeCompare(b.date));
-      if(name==='fichas') DB.cache.fichas.sort((a,b)=>(a.at||0)-(b.at||0));
-      DB._loadCount++;
-      if(DB._loadCount >= 3 && !DB.ready){
-        DB.ready=true;
-        DB._resolveReady();
-      } else if(DB.ready){
-        App.renderPage(S.page);
-      }
-    }, ()=>{ DB._loadCount++; if(DB._loadCount>=3&&!DB.ready){DB.ready=true;DB._resolveReady();} });
-  },
-
-  _fallback(){
-    DB._local=true;
-    const g=(k)=>{try{return JSON.parse(localStorage.getItem('ev_'+k))||[]}catch{return[]}};
-    DB.cache={fichas:g('fichas'),sessoes:g('sessoes'),pesos:g('pesos')};
-    DB.ready=true;
-    DB._resolveReady();
-  },
-
-  _lsave(k){ if(DB._local) localStorage.setItem('ev_'+k, JSON.stringify(DB.cache[k])); },
-
-  fichas:()=>DB.cache.fichas,
-  sessoes:()=>DB.cache.sessoes,
-  pesos:()=>DB.cache.pesos,
-
-  async addFicha(d){
-    if(DB._local){DB.cache.fichas.push(d);DB._lsave('fichas');App.renderFichas();return;}
-    await DB._col('fichas').doc(d.id).set(d);
-  },
-  async updFicha(id,d){
-    if(DB._local){const i=DB.cache.fichas.findIndex(f=>f.id===id);if(i>=0)DB.cache.fichas[i]={...DB.cache.fichas[i],...d};DB._lsave('fichas');App.renderFichas();return;}
-    await DB._col('fichas').doc(id).update(d);
-  },
-  async delFicha(id){
-    if(DB._local){DB.cache.fichas=DB.cache.fichas.filter(f=>f.id!==id);DB._lsave('fichas');App.renderFichas();return;}
-    await DB._col('fichas').doc(id).delete();
-  },
-  async addSessao(d){
-    if(DB._local){DB.cache.sessoes.push(d);DB._lsave('sessoes');return;}
-    await DB._col('sessoes').doc(d.id).set(d);
-  },
-  async addPeso(d){
-    if(DB._local){DB.cache.pesos.push(d);DB.cache.pesos.sort((a,b)=>a.date.localeCompare(b.date));DB._lsave('pesos');App.renderPeso();return;}
-    await DB._col('pesos').doc(d.id).set(d);
-  },
-  async delPeso(id){
-    if(DB._local){DB.cache.pesos=DB.cache.pesos.filter(p=>p.id!==id);DB._lsave('pesos');App.renderPeso();return;}
-    await DB._col('pesos').doc(id).delete();
-  },
-};
-
-// Expose whenReady properly after DB is defined
-DB.whenReady = new Promise(r=>{DB._resolveReady=r;});
-
-// ══════════════════════════════════════════════════════════
-//  STATE
-// ══════════════════════════════════════════════════════════
-const S = {
-  page:'home', timerTab:0, series:0,
-  timer:{total:90,rem:90,running:false,iv:null},
-  workout:{on:false,fichaId:null,dayIdx:null,t0:null,iv:null,exs:[]},
-  charts:{}
-};
-
-// ══════════════════════════════════════════════════════════
-//  UTILS
-// ══════════════════════════════════════════════════════════
-const $=id=>document.getElementById(id);
-const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
-const ft=s=>`${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
-const fd=d=>new Date(d+'T12:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'short'});
-const today=()=>new Date().toISOString().slice(0,10);
-const CDO = {
-  responsive:true, maintainAspectRatio:false,
-  plugins:{legend:{display:false},tooltip:{backgroundColor:'#1a1a30',titleColor:'#fff',bodyColor:'#a0a0c0',borderColor:'rgba(255,255,255,.08)',borderWidth:1,padding:10,cornerRadius:8}},
-  scales:{
-    x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#404060',font:{size:9}}},
-    y:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#404060',font:{size:9}},beginAtZero:true}
-  }
-};
-
-// ══════════════════════════════════════════════════════════
-//  APP
-// ══════════════════════════════════════════════════════════
-const App = {
-
-nav(p){
-  S.page=p;
-  document.querySelectorAll('.page').forEach(el=>el.classList.remove('active'));
-  document.querySelectorAll('.ni').forEach(el=>el.classList.remove('active'));
-  $('pg-'+p).classList.add('active');
-  document.querySelector(`[data-p="${p}"]`).classList.add('active');
-  App.renderPage(p);
-},
-
-renderPage(p){
-  if(p==='home') App.renderHome();
-  else if(p==='fichas') App.renderFichas();
-  else if(p==='stats') App.renderStats();
-  else if(p==='peso') App.renderPeso();
-},
-
-// ─── HOME ─────────────────────────────────────────────────
-renderHome(){
-  const h=new Date().getHours();
-  const [ico,txt] = h<12?[IC.sun(),'Bom dia!']:h<18?[IC.zap(),'Boa tarde!']:[IC.moon(),'Boa noite!'];
-  const gr=$('hero-greet');
-  if(gr) gr.innerHTML=`<span style="color:var(--green)">${ico}</span> ${txt}`;
-
-  const sess=DB.sessoes(), pesos=DB.pesos(), now=new Date();
-  const wk=sess.filter(s=>(now-new Date(s.date))/864e5<=7);
-  const mo=sess.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
-  const vol=mo.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
-  const lp=pesos.length?pesos[pesos.length-1]:null;
-
-  $('home-stats').innerHTML=`
-    <div class="sc"><div class="si">${IC.activity()}</div><div class="sl">SEMANA</div><div class="sv">${wk.length}</div><div class="ss">treinos</div></div>
-    <div class="sc"><div class="si">${IC.layers()}</div><div class="sl">VOLUME</div><div class="sv">${vol>=1000?(vol/1000).toFixed(1)+'t':vol+'kg'}</div><div class="ss">este mês</div></div>
-    <div class="sc"><div class="si">${IC.scale()}</div><div class="sl">PESO</div><div class="sv">${lp?lp.w+'kg':'--'}</div><div class="ss">${lp?fd(lp.date):'sem dados'}</div></div>
-  `;
-
-  const rec=sess.slice(-5).reverse();
-  if(!rec.length){
-    $('home-recent').innerHTML=`<div class="empty"><div class="ei">${IC.activity(44)}</div><div class="et">Nenhum treino registrado</div><div class="es">Inicie um treino para ver<br>seu histórico aqui.</div></div>`;
-    return;
-  }
-  const fichas=DB.fichas();
-  $('home-recent').innerHTML=rec.map(s=>{
-    const f=fichas.find(f=>f.id===s.fichaId);
-    const d=f?.days?.[s.dayIdx];
-    const v=(s.exs||[]).reduce((a,e)=>a+(e.sets||[]).filter(x=>x.done).reduce((b,x)=>b+(+x.reps||0)*(+x.w||0),0),0);
-    return `<div class="wi"><div class="wi-ico">${IC.activity(22)}</div><div class="wi-info"><div class="wi-name">${d?.name||f?.name||'Treino'}</div><div class="wi-sub">${fd(s.date)} · ${(s.exs||[]).length} exercícios · ${v}kg</div></div><div style="font-size:11px;color:var(--t3)">${ft(s.dur||0)}</div></div>`;
-  }).join('');
-},
-
-// ─── FICHAS ───────────────────────────────────────────────
-renderFichas(){
-  const fichas=DB.fichas();
-  if(!fichas.length){
-    $('fichas-list').innerHTML=`<div class="empty"><div class="ei">${IC.clipboard(44)}</div><div class="et">Nenhuma ficha criada</div><div class="es">Crie sua primeira ficha de treino.</div></div>`;
-    return;
-  }
-  $('fichas-list').innerHTML=fichas.map(f=>`
-    <div class="fc">
-      <div class="fc-head">
-        <div style="flex:1"><div class="fc-title">${f.name}</div><div class="fc-sub">${f.days?.length||0} dias · ${(f.days||[]).reduce((a,d)=>a+(d.exs||[]).length,0)} exercícios</div></div>
-        <button class="ibtn" onclick="App.editFicha('${f.id}')">${IC.edit()}</button>
-        <button class="del" onclick="App.delFicha('${f.id}')" style="margin-left:4px">${IC.trash()}</button>
-      </div>
-      ${(f.days||[]).map((d,di)=>`
-        <div class="fc-day" onclick="App.startWorkout('${f.id}',${di})">
-          <div class="fc-dn">${di+1}</div>
-          <div class="fc-di"><div class="fc-dn2">${d.name}</div><div class="fc-ds">${(d.exs||[]).map(e=>e.name).join(', ').slice(0,60)||'—'}</div></div>
-          <button class="btn bp sm" style="width:auto;padding:0 12px" onclick="event.stopPropagation();App.startWorkout('${f.id}',${di})">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-          </button>
-        </div>
-      `).join('')}
-    </div>
-  `).join('');
-},
-
-showAddFicha(ficha=null){
-  const m=document.createElement('div');
-  m.className='mo';
-  m.innerHTML=`<div class="md">
-    <div class="mhandle"></div>
-    <div class="mtitle">${ficha?'Editar Ficha':'Nova Ficha'}</div>
-    <div class="ig"><label>Nome da ficha</label><input type="text" id="f-name" placeholder="ex: Hipertrofia ABC" value="${ficha?.name||''}"></div>
-    <div id="f-days"></div>
-    <button class="btn bg" onclick="App.addDay()" style="margin-bottom:11px">+ Adicionar Dia</button>
-    <button class="btn bp" onclick="App.saveFicha('${ficha?.id||''}')">SALVAR</button>
-    <button class="btn bg" onclick="App.closeModal()" style="margin-top:8px">Cancelar</button>
-  </div>`;
-  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
-  $('mroot').appendChild(m);
-  setTimeout(()=>$('f-name')?.focus(),300);
-  if(ficha) setTimeout(()=>{
-    (ficha.days||[]).forEach(day=>{
-      App.addDay();
-      const b=[...document.querySelectorAll('#f-days .db')].pop();
-      b.querySelector('.db-name').value=day.name||'';
-      (day.exs||[]).forEach(ex=>{
-        App.addExRow(b.querySelector('.ex-list'));
-        const r=[...b.querySelectorAll('.ex-row')].pop();
-        r.querySelector('.en').value=ex.name||'';
-        r.querySelector('.es').value=ex.sets||3;
-        r.querySelector('.er').value=ex.reps||12;
-      });
-    });
-  },100);
-},
-
-addDay(){
-  const cont=$('f-days'), n=cont.querySelectorAll('.db').length+1;
-  const db=document.createElement('div');
-  db.className='db';
-  db.innerHTML=`<div class="db-hdr"><span class="db-lbl">DIA ${n}</span><input type="text" class="db-name" placeholder="Nome (ex: Peito/Tríceps)" style="flex:1;height:32px;font-size:12px;margin-left:8px"><button style="width:26px;height:26px;border:none;background:rgba(255,68,88,.1);color:var(--red);border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-left:6px;flex-shrink:0" onclick="this.closest('.db').remove()">${IC.close()}</button></div><div class="ex-list" style="margin-bottom:8px"></div><button class="btn bg sm" onclick="App.addExRow(this.previousElementSibling)" style="width:auto;padding:0 12px">+ Exercício</button>`;
-  cont.appendChild(db);
-},
-
-addExRow(list){
-  const r=document.createElement('div');
-  r.className='ex-row';
-  r.innerHTML=`<input type="text" class="en" placeholder="Exercício"><input type="number" class="es" placeholder="Sér" value="3" min="1" style="text-align:center"><input type="number" class="er" placeholder="Rep" value="12" min="1" style="text-align:center"><button style="width:28px;height:28px;border:none;background:rgba(255,68,88,.1);color:var(--red);border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center" onclick="this.parentElement.remove()">${IC.close()}</button>`;
-  list.appendChild(r);
-},
-
-async saveFicha(editId){
-  const name=$('f-name')?.value?.trim();
-  if(!name){App.toast('Digite o nome da ficha');return;}
-  const days=[...document.querySelectorAll('#f-days .db')].map((b,i)=>({
-    name:b.querySelector('.db-name')?.value?.trim()||`Dia ${i+1}`,
-    exs:[...b.querySelectorAll('.ex-row')].map(r=>({name:r.querySelector('.en')?.value?.trim()||'',sets:+r.querySelector('.es')?.value||3,reps:+r.querySelector('.er')?.value||12,w:0})).filter(e=>e.name)
-  }));
-  try{
-    if(editId) await DB.updFicha(editId,{name,days,updAt:Date.now()});
-    else await DB.addFicha({id:uid(),name,days,at:Date.now()});
-    App.closeModal();App.renderFichas();
-    App.toast(editId?'Ficha atualizada!':'Ficha criada!');
-  }catch(e){App.toast('Erro ao salvar. Tente novamente.');}
-},
-
-editFicha(id){const f=DB.fichas().find(x=>x.id===id);if(f)App.showAddFicha(f);},
-
-async delFicha(id){
-  if(!confirm('Excluir esta ficha?'))return;
-  try{await DB.delFicha(id);App.toast('Ficha excluída');}
-  catch(e){App.toast('Erro ao excluir.');}
-},
-
-// ─── WORKOUT ──────────────────────────────────────────────
-startTodayWorkout(){
-  if(!DB.fichas().length){App.toast('Crie uma ficha de treino primeiro!');App.nav('fichas');return;}
-  App.showPickModal();
-},
-
-showPickModal(){
-  const fichas=DB.fichas();
-  const m=document.createElement('div');
-  m.className='mo';
-  m.innerHTML=`<div class="md"><div class="mhandle"></div><div class="mtitle">Selecionar Treino</div>
-    ${fichas.map(f=>`<div style="margin-bottom:12px"><div style="font-size:10px;color:var(--t3);font-weight:700;letter-spacing:1.5px;margin-bottom:6px">${f.name.toUpperCase()}</div>${(f.days||[]).map((d,di)=>`<div class="wi" style="margin-bottom:6px" onclick="App.startWorkout('${f.id}',${di});App.closeModal()"><div class="wi-ico">${IC.activity(22)}</div><div class="wi-info"><div class="wi-name">${d.name}</div><div class="wi-sub">${(d.exs||[]).length} exercícios</div></div><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="color:var(--green)"><polygon points="5,3 19,12 5,21"/></svg></div>`).join('')}</div>`).join('')}
-    <button class="btn bg" onclick="App.closeModal()">Cancelar</button>
-  </div>`;
-  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
-  $('mroot').appendChild(m);
-},
-
-startWorkout(fichaId,dayIdx){
-  const f=DB.fichas().find(x=>x.id===fichaId);
-  const d=f?.days?.[dayIdx];if(!d)return;
-  App.closeModal();
-  S.workout={on:true,fichaId,dayIdx,t0:Date.now(),iv:null,
-    exs:(d.exs||[]).map(e=>({name:e.name,ts:e.sets||3,tr:e.reps||12,sets:Array.from({length:e.sets||3},()=>({reps:e.reps||12,w:0,done:false}))}))
-  };
-  $('aw').classList.add('open');
-  $('aw-title').textContent=d.name;
-  S.workout.iv=setInterval(()=>{const el=$('aw-timer');if(el)el.textContent=ft(Math.floor((Date.now()-S.workout.t0)/1000));},1000);
-  App.renderAW();
-},
-
-renderAW(){
-  const{exs}=S.workout;
-  const done=exs.reduce((a,e)=>a+e.sets.filter(s=>s.done).length,0);
-  const total=exs.reduce((a,e)=>a+e.sets.length,0);
-  $('aw-sub').textContent=`${exs.length} exercícios · ${done}/${total} séries`;
-  $('aw-pbar').style.width=total?`${(done/total)*100}%`:'0%';
-  $('aw-body').innerHTML=exs.map((ex,ei)=>`
-    <div class="ex-card ${ex.sets.every(s=>s.done)?'glow':''}">
-      <div class="ex-hdr"><div class="ex-name">${ex.name}</div><span class="ex-tag">${ex.sets.filter(s=>s.done).length}/${ex.sets.length}</span></div>
-      <div class="sets-hdr"><span></span><span>Carga (kg)</span><span>Reps</span><span></span></div>
-      ${ex.sets.map((s,si)=>`<div class="set-row"><div class="sn">${si+1}</div><input type="number" value="${s.w||''}" placeholder="0" min="0" step="0.5" onchange="App.updSet(${ei},${si},'w',this.value)" style="${s.done?'opacity:.4':''}"><input type="number" value="${s.reps||''}" placeholder="${ex.tr}" min="1" onchange="App.updSet(${ei},${si},'reps',this.value)" style="${s.done?'opacity:.4':''}"><div class="set-chk ${s.done?'done':''}" onclick="App.togSet(${ei},${si})">${s.done?IC.check():''}</div></div>`).join('')}
-      <button class="btn bg sm" onclick="App.addSet(${ei})" style="width:auto;padding:0 11px;margin-top:6px">+ Série</button>
-    </div>
-  `).join('');
-},
-
-updSet(ei,si,f,v){S.workout.exs[ei].sets[si][f]=+v;},
-togSet(ei,si){
-  const s=S.workout.exs[ei].sets[si];s.done=!s.done;App.renderAW();
-  if(s.done){App.addSeries(1);App.resetTimer();App.startTimer();App.toast('Timer iniciado!');}
-},
-addSet(ei){const e=S.workout.exs[ei];e.sets.push({reps:e.tr,w:0,done:false});App.renderAW();},
-
-cancelWorkout(){if(!confirm('Descartar treino?'))return;App._endWO(false);},
-finishWorkout(){App._endWO(true);},
-async _endWO(save){
-  clearInterval(S.workout.iv);
-  if(save){
-    try{
-      await DB.addSessao({id:uid(),fichaId:S.workout.fichaId,dayIdx:S.workout.dayIdx,date:new Date().toISOString(),dur:Math.floor((Date.now()-S.workout.t0)/1000),exs:S.workout.exs.map(e=>({name:e.name,sets:e.sets}))});
-      App.toast('Treino concluído!');App.resetSeries();
-    }catch(e){App.toast('Erro ao salvar treino.');}
-  }
-  $('aw').classList.remove('open');S.workout={on:false};
-  if(S.page==='home')App.renderHome();
-},
-
-// ─── TIMER ────────────────────────────────────────────────
-showTimerTab(i){
-  S.timerTab=i;
-  document.querySelectorAll('.seg-btn').forEach((b,bi)=>b.classList.toggle('on',bi===i));
-  $('tab-interval').style.display=i===0?'block':'none';
-  $('tab-series').style.display=i===1?'block':'none';
-},
-setPreset(s){
-  if(S.timer.running)App.stopTimer();
-  S.timer.total=s;S.timer.rem=s;App.updTimer();
-  document.querySelectorAll('.tp').forEach(b=>b.classList.remove('on'));
-  [30,45,90,120,180].forEach((v,i)=>{if(v===s)document.querySelectorAll('.tp')[i]?.classList.add('on');});
-  const cm=$('cmin'),cs=$('csec');if(cm)cm.value=Math.floor(s/60);if(cs)cs.value=s%60;
-},
-setCustomTime(){
-  const t=(+($('cmin')?.value||0))*60+(+($('csec')?.value||0));
-  if(t>0){if(S.timer.running)App.stopTimer();S.timer.total=t;S.timer.rem=t;App.updTimer();document.querySelectorAll('.tp').forEach(b=>b.classList.remove('on'));}
-},
-toggleTimer(){S.timer.running?App.stopTimer():App.startTimer();},
-startTimer(){
-  if(S.timer.rem<=0)S.timer.rem=S.timer.total;
-  S.timer.running=true;
-  const s=$('tstatus');if(s)s.textContent='CONTANDO';
-  const ico=$('tplayico');if(ico)ico.innerHTML='<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
-  S.timer.iv=setInterval(()=>{
-    S.timer.rem--;App.updTimer();
-    if(S.timer.rem<=0){
-      App.stopTimer();
-      const st=$('tstatus');if(st)st.textContent='TEMPO!';
-      if(navigator.vibrate)navigator.vibrate([250,100,250,100,250]);
-      App.toast('Intervalo finalizado!');
-    }
-  },1000);
-},
-stopTimer(){
-  S.timer.running=false;clearInterval(S.timer.iv);
-  const ico=$('tplayico');if(ico)ico.innerHTML='<polygon points="5,3 19,12 5,21"/>';
-  const st=$('tstatus');if(st)st.textContent=S.timer.rem>0?'PAUSADO':'PRONTO';
-},
-resetTimer(){App.stopTimer();S.timer.rem=S.timer.total;App.updTimer();const st=$('tstatus');if(st)st.textContent='PRONTO';},
-updTimer(){
-  const{total,rem}=S.timer;
-  const d=$('tdisplay'),r=$('tring');
-  if(d)d.textContent=ft(rem);
-  if(r){const C=647.08,p=total>0?rem/total:1;r.style.strokeDasharray=C;r.style.strokeDashoffset=C*(1-p);r.setAttribute('stroke',rem<=10&&rem>0?'#ff4458':'url(#tg)');}
-},
-
-// ─── SERIES ───────────────────────────────────────────────
-addSeries(d){
-  S.series=Math.max(0,S.series+d);
-  const el=$('sc-num');
-  if(el){el.textContent=S.series;el.style.color=S.series>0?'var(--green)':'var(--text)';el.classList.add('bump');setTimeout(()=>el.classList.remove('bump'),160);}
-},
-resetSeries(){S.series=0;const el=$('sc-num');if(el){el.textContent=0;el.style.color='var(--text)';}},
-
-// ─── STATS ────────────────────────────────────────────────
-renderStats(){
-  const sess=DB.sessoes(),pesos=DB.pesos();
-  if(!sess.length&&!pesos.length){
-    $('stats-content').innerHTML=`<div class="empty"><div class="ei">${IC.trendUp(44)}</div><div class="et">Sem dados ainda</div><div class="es">Registre treinos e pesagens<br>para ver suas estatísticas.</div></div>`;
-    return;
-  }
-  const total=sess.length;
-  const vol=sess.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
-  const series=sess.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).length,0),0);
-  const now=new Date();
-  const wkL=[],wkD=[];
-  for(let i=7;i>=0;i--){const d=new Date(now);d.setDate(d.getDate()-i*7);const s=new Date(d);s.setDate(d.getDate()-d.getDay());const e2=new Date(s);e2.setDate(s.getDate()+6);wkD.push(sess.filter(x=>{const xd=new Date(x.date);return xd>=s&&xd<=e2;}).length);wkL.push(i===0?'Esta':`S-${i}`);}
-  const moL=[],moD=[];
-  for(let i=5;i>=0;i--){const d=new Date(now);d.setMonth(d.getMonth()-i);moL.push(d.toLocaleDateString('pt-BR',{month:'short'}));moD.push(Math.round(sess.filter(s=>{const sd=new Date(s.date);return sd.getMonth()===d.getMonth()&&sd.getFullYear()===d.getFullYear();}).reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0)));}
-
-  $('stats-content').innerHTML=`
-    <div class="srow">
-      <div class="sc"><div class="si">${IC.trophy()}</div><div class="sl">TREINOS</div><div class="sv">${total}</div><div class="ss">total</div></div>
-      <div class="sc"><div class="si">${IC.layers()}</div><div class="sl">VOLUME</div><div class="sv">${vol>=1000?(vol/1000).toFixed(0)+'t':vol+'kg'}</div><div class="ss">total</div></div>
-      <div class="sc"><div class="si" style="color:var(--orange)">${IC.flame()}</div><div class="sl">SÉRIES</div><div class="sv">${series}</div><div class="ss">total</div></div>
-    </div>
-    <div class="stitle">FREQUÊNCIA SEMANAL</div>
-    <div class="card"><div class="cwrap"><canvas id="ch-wk"></canvas></div></div>
-    <div class="stitle">VOLUME MENSAL (kg)</div>
-    <div class="card"><div class="cwrap"><canvas id="ch-mo"></canvas></div></div>
-    ${pesos.length>=2?`<div class="stitle">EVOLUÇÃO DO PESO</div><div class="card"><div class="cwrap"><canvas id="ch-pe"></canvas></div></div>`:''}
-  `;
-  setTimeout(()=>{
-    Object.values(S.charts).forEach(c=>{try{c.destroy()}catch{}});S.charts={};
-    if($('ch-wk'))S.charts.wk=new Chart($('ch-wk'),{type:'bar',data:{labels:wkL,datasets:[{data:wkD,backgroundColor:wkD.map((_,i)=>i===7?'rgba(0,230,118,.85)':'rgba(0,230,118,.25)'),borderRadius:6,borderSkipped:false}]},options:CDO});
-    if($('ch-mo'))S.charts.mo=new Chart($('ch-mo'),{type:'bar',data:{labels:moL,datasets:[{data:moD,backgroundColor:'rgba(0,230,118,.28)',borderColor:'#00e676',borderWidth:1,borderRadius:6,borderSkipped:false}]},options:CDO});
-    if($('ch-pe')&&pesos.length>=2){const lp=pesos.slice(-12);const op={...CDO,scales:{...CDO.scales,y:{...CDO.scales.y,beginAtZero:false}}};S.charts.pe=new Chart($('ch-pe'),{type:'line',data:{labels:lp.map(p=>fd(p.date)),datasets:[{data:lp.map(p=>p.w),borderColor:'#00e676',backgroundColor:'rgba(0,230,118,.07)',fill:true,tension:.4,pointRadius:4,pointBackgroundColor:'#00e676'}]},options:op});}
-  },50);
-},
-
-// ─── PESO ─────────────────────────────────────────────────
-renderPeso(){
-  const pesos=DB.pesos();
-  if(S.charts.peso){try{S.charts.peso.destroy()}catch{}delete S.charts.peso;}
-  const cw=$('peso-chart');
-  if(pesos.length>=2&&cw){
-    const last=pesos.slice(-24);
-    const op={...CDO,scales:{...CDO.scales,y:{...CDO.scales.y,beginAtZero:false}}};
-    setTimeout(()=>{S.charts.peso=new Chart(cw,{type:'line',data:{labels:last.map(p=>fd(p.date)),datasets:[{data:last.map(p=>p.w),borderColor:'#00e676',backgroundColor:'rgba(0,230,118,.07)',fill:true,tension:.4,pointRadius:3,pointBackgroundColor:'#00e676'}]},options:op});},50);
-  } else if(cw){cw.parentElement.innerHTML='<div style="height:80px;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:12px">Registre ao menos 2 pesagens</div>';}
-
-  const hist=$('peso-hist');
-  if(!pesos.length){hist.innerHTML=`<div class="empty" style="padding:24px"><div class="ei">${IC.scale(44)}</div><div class="et">Nenhuma pesagem</div><div class="es">Comece registrando seu peso acima.</div></div>`;return;}
-  hist.innerHTML=pesos.slice(-30).reverse().map((p,i,arr)=>{
-    const prev=arr[i+1];const diff=prev?(p.w-prev.w).toFixed(1):null;
-    const cls=diff===null?'eq':+diff>0?'up':'dn';
-    return `<div class="prow"><div class="pdate"><div class="pd1">${fd(p.date)}</div><div class="pd2">${p.period||''} ${p.obs||''}</div></div><div class="pval">${p.w} kg</div><div class="pdif ${cls}">${diff!==null?(+diff>0?'+':'')+diff:'—'}</div><button class="del" onclick="App.delPeso('${p.id}')">${IC.trash()}</button></div>`;
-  }).join('');
-},
-
-async savePeso(){
-  const w=parseFloat($('p-weight')?.value);
-  const date=$('p-date')?.value||today();
-  const obs=$('p-obs')?.value?.trim()||'';
-  const period=$('p-period')?.value||'';
-  if(!w||w<30||w>300){App.toast('Informe um peso válido');return;}
-  try{
-    await DB.addPeso({id:uid(),w,date,obs,period});
-    $('p-weight').value='';$('p-obs').value='';$('p-period').value='';
-    App.toast(`${w} kg registrado!`);App.renderPeso();
-  }catch(e){App.toast('Erro ao salvar.');}
-},
-async delPeso(id){await DB.delPeso(id);App.renderPeso();},
-
-// ─── FIREBASE SETUP ───────────────────────────────────────
-showFBSetup(needsCfg=true){
-  $('loading').style.display='none';
-  $('fbsetup').classList.add('open');
-  if(!needsCfg){
-    // Already has config but wants to reconfigure or is in offline mode
-  }
-},
-
-saveFBConfig(){
-  const raw=$('fb-cfg-input')?.value?.trim();
-  try{
-    // Extract JSON object even if pasted as full variable declaration
-    const match = raw.match(/\{[\s\S]*\}/);
-    if(!match) throw new Error();
-    const cfg=JSON.parse(match[0]);
-    if(!cfg.apiKey) throw new Error('Missing apiKey');
-    localStorage.setItem('evolv_fbcfg',JSON.stringify(cfg));
-    localStorage.removeItem('evolv_offline');
-    location.reload();
-  }catch(e){App.toast('Config inválida. Verifique o JSON.');}
-},
-
-skipFBSetup(){
-  localStorage.setItem('evolv_offline','1');
-  $('fbsetup').classList.remove('open');
-  DB._fallback();
-  App.boot();
-},
-
-// ─── BOOT ─────────────────────────────────────────────────
-boot(){
-  $('loading').style.display='none';
-  $('app').style.display='flex';
-  if($('p-date'))$('p-date').value=today();
-  App.updTimer();App.renderHome();
-  App.updateDot();
-  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();App._ip=e;});
-},
-
-updateDot(){
-  const dot=$('status-dot');if(!dot)return;
-  const on=DB._local?false:(DB._online!==false);
-  dot.classList.toggle('off',!on);
-  dot.title=on?'Sincronizado':'Sem conexão';
-},
-
-// ─── UTILS ────────────────────────────────────────────────
-closeModal(){document.querySelectorAll('.mo').forEach(m=>m.remove());},
-toast(msg){
-  document.querySelectorAll('.toast').forEach(t=>t.remove());
-  const t=document.createElement('div');t.className='toast';t.textContent=msg;
-  document.body.appendChild(t);setTimeout(()=>t.remove(),2600);
-},
-};
-
-// ══════════════════════════════════════════════════════════
-//  PWA
-// ══════════════════════════════════════════════════════════
-if('serviceWorker' in navigator){
-  const sw=`const C='evolv-v2';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(clients.claim());});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(caches.open(C).then(c=>c.match(e.request).then(r=>r||fetch(e.request).then(res=>{c.put(e.request,res.clone());return res;}).catch(()=>new Response('',{status:503})))));});`;
-  navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});
-}
-(()=>{
-  const mf={name:'EVOLV',short_name:'EVOLV',theme_color:'#080810',background_color:'#080810',display:'standalone',orientation:'portrait',start_url:'.',icons:[{src:'icon.png',sizes:'512x512',type:'image/png',purpose:'any maskable'}]};
-  const l=document.createElement('link');l.rel='manifest';l.href=URL.createObjectURL(new Blob([JSON.stringify(mf)],{type:'application/json'}));document.head.appendChild(l);
-})();
-
-// ══════════════════════════════════════════════════════════
-//  INIT
-// ══════════════════════════════════════════════════════════
-DB.whenReady = new Promise(r=>{DB._resolveReady=r;});
-DB.init().then(()=>{
-  DB.whenReady.then(()=>App.boot());
-  // Safety timeout: if Firebase takes too long, boot anyway
-  setTimeout(()=>{if(!DB.ready){DB.ready=true;DB._resolveReady();}},6000);
-});
-</script>
+<script src="evolv-app.js"></script>
 </body>
 </html>
