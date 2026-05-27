@@ -1,26 +1,20 @@
 // ═══════════════════════════════════════════════════════════════
-// EVOLV — app logic (integrated redesign)
-// All Firebase / Firestore / Chart.js / business logic preserved from
-// the original; only the rendering layer was rewritten to match the
-// new design system in evolv-styles.css.
+// EVOLV — app logic
+// Correções aplicadas:
+//  1. Notificação push ao fim do timer
+//  2. requestNotifPermission() + banner no painel de notificações
+//  3. exportFichas() + downloadTemplate() restaurados
+//  4. Botões de exportar/modelo na toolbar de fichas
+//  5. Cálculo de meta de peso corrigido (5% abaixo do atual)
+//  6. showWeightGoalModal() + saveWeightGoal() para editar meta
 // ═══════════════════════════════════════════════════════════════
 
-// ─── FIREBASE CONFIG ─────────────────────────────────────────────
-// Substitua pelos seus dados ou o app pedirá no 1º acesso.
-// Regras Realtime Database recomendadas:
-//   {
-//     "rules": {
-//       "users": {
-//         "$uid": {
-//           ".read": "auth != null && auth.uid == $uid",
-//           ".write": "auth != null && auth.uid == $uid"
-//         }
-//       }
-//     }
-//   }
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyCvwm5Abo4sL0WTGcUdIBPUj4qUSDtO4J8",
   authDomain: "evolv-82ec2.firebaseapp.com",
+  // databaseURL é OBRIGATÓRIO para o Realtime Database
+  // Formato: https://<project-id>-default-rtdb.firebaseio.com
+  databaseURL: "https://evolv-82ec2-default-rtdb.firebaseio.com",
   projectId: "evolv-82ec2",
   storageBucket: "evolv-82ec2.firebasestorage.app",
   messagingSenderId: "934840298557",
@@ -53,6 +47,10 @@ const IC = {
   arrowRight:(s=14)=>IC._s('<path d="M5 12h14M13 6l6 6-6 6"/>',s),
   chevronRight:(s=14)=>IC._s('<path d="M9 6l6 6-6 6"/>',s),
   download:(s=14)=>IC._s('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5M12 15V3"/>',s),
+  upload:(s=14)=>IC._s('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',s),
+  export:(s=14)=>IC._s('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',s),
+  info:(s=14)=>IC._s('<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>',s),
+  bell:(s=18)=>IC._s('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',s),
   target:(s=18)=>IC._s('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/>',s),
 };
 
@@ -64,26 +62,60 @@ const DB = {
 
   async init(){
     let cfg = FIREBASE_CONFIG;
+
+    // Se não tem config hardcoded, tenta ler do localStorage
     if(!cfg.apiKey){
       const saved = localStorage.getItem('evolv_fbcfg');
       if(saved) try{ cfg = JSON.parse(saved); }catch{}
     }
-    if(!cfg.apiKey || localStorage.getItem('evolv_offline')==='1'){
-      App.showFBSetup(!cfg.apiKey);
+
+    // Sem config → mostra tela de setup
+    if(!cfg.apiKey){
+      App.showFBSetup(true);
       return;
     }
+
+    // Usuário escolheu modo offline explicitamente
+    if(localStorage.getItem('evolv_offline')==='1'){
+      console.info('[EVOLV] Modo offline ativo. Clique no ponto vermelho para reconectar.');
+      DB._fallback();
+      return;
+    }
+
+    // Realtime Database EXIGE databaseURL — erro mais comum
+    if(!cfg.databaseURL){
+      const guessed = `https://${cfg.projectId}-default-rtdb.firebaseio.com`;
+      console.warn(`[EVOLV] databaseURL ausente. Tentando: ${guessed}`);
+      cfg = { ...cfg, databaseURL: guessed };
+    }
+
     try{
       firebase.initializeApp(cfg);
       DB._db = firebase.database();
+
+      // Testa conectividade antes de continuar
+      await DB._db.ref('.info/connected').once('value');
+
       const cred = await firebase.auth().signInAnonymously();
       DB._uid = cred.user.uid;
+      console.info('[EVOLV] Firebase conectado. UID:', DB._uid);
+
       DB._listen('fichas'); DB._listen('sessoes'); DB._listen('pesos');
+
       window.addEventListener('online',  ()=>{ DB._online=true;  App.updateDot(); });
       window.addEventListener('offline', ()=>{ DB._online=false; App.updateDot(); });
       DB._online = navigator.onLine;
+
     } catch(e){
-      console.warn('Firebase falhou, usando offline:', e);
+      console.error('[EVOLV] Firebase falhou:', e.code || e.message);
       DB._fallback();
+      // Avisa o usuário com a causa real
+      const msg = e.code === 'auth/network-request-failed'
+        ? 'Sem conexão com internet'
+        : e.message?.includes('databaseURL') || e.code === 'app/invalid-credential'
+          ? 'Config Firebase inválida — verifique databaseURL'
+          : 'Firebase indisponível';
+      setTimeout(()=>App && App.toast && App.toast(`⚠️ ${msg} — dados salvos localmente`), 1200);
     }
   },
 
@@ -97,11 +129,8 @@ const DB = {
       if(name==='sessoes') DB.cache.sessoes.sort((a,b)=>a.date.localeCompare(b.date));
       if(name==='fichas') DB.cache.fichas.sort((a,b)=>(a.at||0)-(b.at||0));
       DB._loadCount++;
-      if(DB._loadCount >= 3 && !DB.ready){
-        DB.ready=true; DB._resolveReady();
-      } else if(DB.ready){
-        App.renderPage(S.page);
-      }
+      if(DB._loadCount >= 3 && !DB.ready){ DB.ready=true; DB._resolveReady(); }
+      else if(DB.ready){ App.renderPage(S.page); }
     }, err=>{ DB._loadCount++; if(DB._loadCount>=3 && !DB.ready){DB.ready=true; DB._resolveReady();} });
   },
 
@@ -152,7 +181,6 @@ const S = {
   workout:{on:false,fichaId:null,dayIdx:null,t0:null,iv:null,exs:[]},
   charts:{},
   notifications:[],
-  // colors cycled across fichas for the watermark/accent
   fichaColors: ['var(--heat)','var(--cool)','var(--violet)','var(--green)','var(--amber)','var(--red)'],
 };
 
@@ -161,7 +189,7 @@ const $=id=>document.getElementById(id);
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const ft=s=>`${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
 const fd=d=>{
-  if(!d)return '—';
+  if(!d) return '—';
   return new Date(d+(d.length===10?'T12:00':'')).toLocaleDateString('pt-BR',{day:'2-digit',month:'short'});
 };
 const today=()=>new Date().toISOString().slice(0,10);
@@ -178,7 +206,6 @@ const relTime=(iso)=>{
   return `há ${Math.floor(diff/30)} meses`;
 };
 
-// Chart.js default options matching the new dark theme
 const CDO = {
   responsive:true, maintainAspectRatio:false,
   plugins:{legend:{display:false},tooltip:{
@@ -193,11 +220,7 @@ const CDO = {
   }
 };
 
-const ACCENT = '#1FE07A';
-const ACCENT_2 = '#15B863';
-const ACCENT_DIM = 'rgba(31,224,122,0.18)';
-const COOL = '#6BA8FF';
-const HEAT = '#FF8A3B';
+const ACCENT='#1FE07A', ACCENT_2='#15B863', COOL='#6BA8FF', HEAT='#FF8A3B';
 
 // ═══════════════════════════════════════════════════════════════
 //  APP
@@ -221,17 +244,15 @@ renderPage(p){
   else if(p==='peso') App.renderPeso();
 },
 
-// ─── SFX (WebAudio) ─────────────────────────────────────────────
+// ─── SFX ────────────────────────────────────────────────────────
 sound:{
   enabled: localStorage.getItem('evolv_sfx')!=='0',
   _ctx:null,_gain:null,
   init(){
     try{
       const C = window.AudioContext || window.webkitAudioContext;
-      this._ctx = new C();
-      this._gain = this._ctx.createGain();
-      this._gain.connect(this._ctx.destination);
-      this._gain.gain.value = 0.12;
+      this._ctx = new C(); this._gain = this._ctx.createGain();
+      this._gain.connect(this._ctx.destination); this._gain.gain.value = 0.12;
     }catch(e){ this._ctx = null; }
   },
   play(type='click'){
@@ -239,20 +260,17 @@ sound:{
     if(!this._ctx) try{ this.init(); }catch{}
     if(!this._ctx) return;
     const now = this._ctx.currentTime;
-    const g = this._gain;
-    const o = this._ctx.createOscillator();
-    o.type = 'sine';
+    const o = this._ctx.createOscillator(); o.type='sine';
     o.frequency.setValueAtTime(type==='click'?1100:800, now);
     const gg = this._ctx.createGain();
-    gg.gain.setValueAtTime(0.0001, now);
-    gg.gain.exponentialRampToValueAtTime(1, now + 0.006);
-    gg.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
-    o.connect(gg); gg.connect(g);
-    o.start(now); o.stop(now + 0.07);
+    gg.gain.setValueAtTime(0.0001,now);
+    gg.gain.exponentialRampToValueAtTime(1,now+0.006);
+    gg.gain.exponentialRampToValueAtTime(0.0001,now+0.06);
+    o.connect(gg); gg.connect(this._gain);
+    o.start(now); o.stop(now+0.07);
   },
-  toggle(v){ this.enabled = typeof v==='boolean' ? v : !this.enabled; localStorage.setItem('evolv_sfx', this.enabled ? '1' : '0'); }
+  toggle(v){ this.enabled=typeof v==='boolean'?v:!this.enabled; localStorage.setItem('evolv_sfx',this.enabled?'1':'0'); }
 },
-
 
 // ─── HOME ────────────────────────────────────────────────────────
 renderHome(){
@@ -260,12 +278,10 @@ renderHome(){
   const [ico,txt] = h<12?[IC.sun(14),'Bom dia']:h<18?[IC.zap(14),'Boa tarde']:[IC.moon(14),'Boa noite'];
   const sess=DB.sessoes(), pesos=DB.pesos(), fichas=DB.fichas(), now=new Date();
 
-  // metrics
   const wk = sess.filter(s=>(now-new Date(s.date))/864e5<=7);
   const mo = sess.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
   const vol = mo.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
 
-  // streak: consecutive days with at least 1 session, going back from today
   const sessDays = new Set(sess.map(s=>s.date.slice(0,10)));
   let streak = 0;
   for(let i=0;i<60;i++){
@@ -275,11 +291,7 @@ renderHome(){
     else if(i>0) break;
   }
 
-  // last session
-  const last = sess.length ? sess[sess.length-1] : null;
   const suggestedFicha = fichas[0];
-
-  // Hero — adapt copy based on data state
   const heroTitle = suggestedFicha
     ? `Pronto para <em>${(suggestedFicha.days?.[0]?.name || suggestedFicha.name).slice(0,28)}</em>?`
     : `Sua evolução <em>começa aqui.</em>`;
@@ -287,7 +299,6 @@ renderHome(){
     ? `<span>${IC.layers(14)} ${suggestedFicha.days?.length||0} dias</span><span>${IC.activity(14)} ${(suggestedFicha.days||[]).reduce((a,d)=>a+(d.exs||[]).length,0)} exercícios</span>`
     : '';
 
-  // recent sessions
   const recent = sess.slice(-3).reverse();
   const recentHtml = recent.length
     ? recent.map((s,i)=>{
@@ -315,38 +326,32 @@ renderHome(){
         <div class="es">Inicie um treino para ver<br>seu histórico aqui.</div>
       </div>`;
 
-  // week dots: 7 days ending today
   const dayLabels=['D','S','T','Q','Q','S','S'];
+  const weekTarget = 5;
   const weekDots = Array.from({length:7}).map((_,i)=>{
     const d=new Date(now); d.setDate(now.getDate()-(6-i));
     const k=d.toISOString().slice(0,10);
-    const done = sessDays.has(k);
-    const today = i===6;
-    const dow = d.getDay();
+    const done = sessDays.has(k); const today = i===6; const dow = d.getDay();
     return `<div class="wk-day">
       <div class="wd">${dayLabels[dow]}</div>
       <div class="wdot ${done?'done':''} ${today&&!done?'today':''}">${done?IC.check(14):''}</div>
     </div>`;
   }).join('');
 
-  const weekTarget = 5;
   $('pg-home').innerHTML = `
     <div class="hero">
       <div class="hg">${ico}<span>${txt}</span></div>
       <div class="ht">${heroTitle}</div>
       ${heroMeta?`<div class="hmeta">${heroMeta}</div>`:''}
       <button class="btn bp lg" onclick="App.startTodayWorkout()">
-        ${IC.play(14)}
-        <span>Iniciar treino</span>
+        ${IC.play(14)}<span>Iniciar treino</span>
       </button>
     </div>
-
     <div class="srow">
       <div class="sc"><div class="sl">Semana</div><div class="sv">${wk.length}<small>/${weekTarget}</small></div><div class="ss">treinos</div></div>
       <div class="sc"><div class="sl" style="color:var(--heat)">Volume</div><div class="sv">${vol>=1000?(vol/1000).toFixed(1):vol}<small>${vol>=1000?'t':'kg'}</small></div><div class="ss">este mês</div></div>
       <div class="sc"><div class="sl" style="color:var(--cool)">Streak</div><div class="sv">${streak}<small>d</small></div><div class="ss">${streak>0?'ativo':'—'}</div></div>
     </div>
-
     <div class="card">
       <div class="between" style="margin-bottom:12px">
         <div class="eyebrow">Esta semana</div>
@@ -354,7 +359,6 @@ renderHome(){
       </div>
       <div class="wk-grid">${weekDots}</div>
     </div>
-
     <div class="between" style="padding:18px 2px 8px">
       <div class="eyebrow">Últimos treinos</div>
       ${recent.length?`<button onclick="App.nav('stats')" style="display:flex;align-items:center;gap:4px;color:var(--t1);font-size:12px">Ver tudo ${IC.chevronRight(14)}</button>`:''}
@@ -369,6 +373,7 @@ renderFichas(){
   const sess=DB.sessoes();
   const root=$('pg-fichas');
 
+  // FIX 3: Toolbar com botões de exportar e modelo
   const top = `
     <div style="margin:4px 0 14px">
       <div class="eyebrow" style="color:var(--green)">Suas fichas</div>
@@ -380,7 +385,15 @@ renderFichas(){
       <button class="btn bp sm" style="flex:1" onclick="App.showAddFicha()">
         ${IC.plus(14)} Nova ficha
       </button>
-      <button class="icon-btn" onclick="App.showImportFicha()" title="Importar JSON">${IC.download(16)}</button>
+      <button class="icon-btn" onclick="App.showImportFicha()" title="Importar JSON">
+        ${IC.upload(16)}
+      </button>
+      <button class="icon-btn" onclick="App.exportFichas()" title="Exportar fichas">
+        ${IC.export(16)}
+      </button>
+      <button class="icon-btn" onclick="App.downloadTemplate()" title="Baixar modelo JSON">
+        ${IC.info(16)}
+      </button>
     </div>
   `;
 
@@ -399,12 +412,10 @@ renderFichas(){
     const color = S.fichaColors[fi % S.fichaColors.length];
     const tag = String.fromCharCode(65 + fi);
     const totalEx = (f.days||[]).reduce((a,d)=>a+(d.exs||[]).length,0);
-    // sessions for this ficha
     const fSess = sess.filter(s=>s.fichaId===f.id);
     const lastDate = fSess.length ? fSess[fSess.length-1].date : null;
     const totalVol = fSess.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
     const avgVol = fSess.length ? totalVol / fSess.length : 0;
-    // progress = ratio of sets done in the last session
     let progress = 0;
     if(fSess.length){
       const ls = fSess[fSess.length-1];
@@ -416,7 +427,6 @@ renderFichas(){
     return `<div class="fc">
       <div class="fc-accent" style="background:${color}"></div>
       <div class="fc-watermark" style="color:color-mix(in oklab, ${color} 8%, transparent)">${tag}</div>
-
       <div class="fc-head">
         <div class="fc-head-info">
           <div class="fc-name">
@@ -428,33 +438,20 @@ renderFichas(){
         <button class="icon-btn" style="width:32px;height:32px;border-radius:9px" onclick="App.editFicha('${f.id}')">${IC.edit(14)}</button>
         <button class="icon-btn danger" style="width:32px;height:32px;border-radius:9px" onclick="App.delFicha('${f.id}')">${IC.trash(14)}</button>
       </div>
-
       <div class="fc-stats">
-        <div class="fc-stat">
-          <div class="num">${(f.days||[]).length}</div>
-          <div class="lbl">dias</div>
-        </div>
+        <div class="fc-stat"><div class="num">${(f.days||[]).length}</div><div class="lbl">dias</div></div>
         <div class="fc-divider"></div>
-        <div class="fc-stat">
-          <div class="num">${avgVol>=1000?(avgVol/1000).toFixed(1)+'t':Math.round(avgVol)+'kg'}</div>
-          <div class="lbl">volume médio</div>
-        </div>
+        <div class="fc-stat"><div class="num">${avgVol>=1000?(avgVol/1000).toFixed(1)+'t':Math.round(avgVol)+'kg'}</div><div class="lbl">volume médio</div></div>
         <div class="fc-divider"></div>
-        <div class="fc-stat">
-          <div style="font-size:13px;color:var(--t1);font-weight:500">${lastDate?relTime(lastDate):'—'}</div>
-          <div class="lbl">última</div>
-        </div>
+        <div class="fc-stat"><div style="font-size:13px;color:var(--t1);font-weight:500">${lastDate?relTime(lastDate):'—'}</div><div class="lbl">última</div></div>
       </div>
-
       ${fSess.length ? `
-      <div class="fc-prog-row">
-        <div class="eyebrow" style="font-size:10px">Última sessão</div>
-        <div class="mono" style="font-size:11px;color:${color}">${Math.round(progress*100)}%</div>
-      </div>
-      <div class="prog-track">
-        <div class="prog-bar" style="width:${progress*100}%;background:${color}"></div>
-      </div>` : ''}
-
+        <div class="fc-prog-row">
+          <div class="eyebrow" style="font-size:10px">Última sessão</div>
+          <div class="mono" style="font-size:11px;color:${color}">${Math.round(progress*100)}%</div>
+        </div>
+        <div class="prog-track"><div class="prog-bar" style="width:${progress*100}%;background:${color}"></div></div>
+      ` : ''}
       <div style="margin-top:14px">
         ${(f.days||[]).map((d,di)=>`
           <div class="fc-day" onclick="App.startWorkout('${f.id}',${di})">
@@ -474,21 +471,18 @@ renderFichas(){
 // ─── TIMER ───────────────────────────────────────────────────────
 renderTimerTicks(){
   const g = document.getElementById('tring-ticks');
-  if(!g || g.childElementCount) return; // only once
-  const size = 280, r = 126, stroke = 14;
+  if(!g || g.childElementCount) return;
+  const size=280, r=126, stroke=14;
   for(let i=0;i<60;i++){
-    const angle = (i/60)*2*Math.PI - Math.PI/2;
-    const innerR = r - stroke/2 - 8;
-    const outerR = r - stroke/2 - (i%5===0 ? 14 : 11);
-    const x1 = size/2 + Math.cos(angle)*innerR;
-    const y1 = size/2 + Math.sin(angle)*innerR;
-    const x2 = size/2 + Math.cos(angle)*outerR;
-    const y2 = size/2 + Math.sin(angle)*outerR;
-    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
-    line.setAttribute('x1',x1); line.setAttribute('y1',y1);
-    line.setAttribute('x2',x2); line.setAttribute('y2',y2);
-    line.setAttribute('stroke', i%5===0 ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.06)');
-    line.setAttribute('stroke-width', i%5===0 ? '1.6' : '1');
+    const angle=(i/60)*2*Math.PI-Math.PI/2;
+    const innerR=r-stroke/2-8, outerR=r-stroke/2-(i%5===0?14:11);
+    const x1=size/2+Math.cos(angle)*innerR, y1=size/2+Math.sin(angle)*innerR;
+    const x2=size/2+Math.cos(angle)*outerR, y2=size/2+Math.sin(angle)*outerR;
+    const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1',x1);line.setAttribute('y1',y1);
+    line.setAttribute('x2',x2);line.setAttribute('y2',y2);
+    line.setAttribute('stroke',i%5===0?'rgba(255,255,255,0.16)':'rgba(255,255,255,0.06)');
+    line.setAttribute('stroke-width',i%5===0?'1.6':'1');
     line.setAttribute('stroke-linecap','round');
     g.appendChild(line);
   }
@@ -497,8 +491,8 @@ renderTimerTicks(){
 showTimerTab(i){
   S.timerTab=i;
   document.querySelectorAll('.seg-btn').forEach((b,bi)=>b.classList.toggle('on',bi===i));
-  $('tab-interval').style.display = i===0?'block':'none';
-  $('tab-series').style.display = i===1?'block':'none';
+  $('tab-interval').style.display=i===0?'block':'none';
+  $('tab-series').style.display=i===1?'block':'none';
 },
 
 setPreset(s){
@@ -506,12 +500,12 @@ setPreset(s){
   S.timer.total=s; S.timer.rem=s; App.updTimer();
   document.querySelectorAll('.tp').forEach(b=>b.classList.remove('on'));
   [30,45,90,120,180].forEach((v,i)=>{ if(v===s) document.querySelectorAll('.tp')[i]?.classList.add('on'); });
-  if($('cmin')) $('cmin').value = Math.floor(s/60);
-  if($('csec')) $('csec').value = s%60;
+  if($('cmin')) $('cmin').value=Math.floor(s/60);
+  if($('csec')) $('csec').value=s%60;
 },
 
 setCustomTime(){
-  const t = (+($('cmin')?.value||0))*60 + (+($('csec')?.value||0));
+  const t=(+($('cmin')?.value||0))*60+(+($('csec')?.value||0));
   if(t>0){
     if(S.timer.running) App.stopTimer();
     S.timer.total=t; S.timer.rem=t; App.updTimer();
@@ -522,112 +516,116 @@ setCustomTime(){
 toggleTimer(){ S.timer.running ? App.stopTimer() : App.startTimer(); },
 
 startTimer(){
-  if(S.timer.rem<=0) S.timer.rem = S.timer.total;
+  if(S.timer.rem<=0) S.timer.rem=S.timer.total;
   S.timer.running=true;
   $('tstatus').textContent='Contando';
-  $('tplayico').outerHTML = '<svg id="tplayico" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4.5" height="14" rx="1.2"/><rect x="13.5" y="5" width="4.5" height="14" rx="1.2"/></svg>';
-  S.timer.iv = setInterval(()=>{
+  $('tplayico').outerHTML='<svg id="tplayico" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4.5" height="14" rx="1.2"/><rect x="13.5" y="5" width="4.5" height="14" rx="1.2"/></svg>';
+  S.timer.iv=setInterval(()=>{
     S.timer.rem--; App.updTimer();
     if(S.timer.rem<=0){
       App.stopTimer();
       $('tstatus').textContent='Tempo!';
       if(navigator.vibrate) navigator.vibrate([250,100,250,100,250]);
       App.toast('Intervalo finalizado!');
+      // FIX 1: Dispara notificação push ao fim do timer
+      App.sendTimerNotification();
     }
   },1000);
 },
 
 stopTimer(){
   S.timer.running=false; clearInterval(S.timer.iv);
-  const old = $('tplayico');
-  if(old) old.outerHTML = '<svg id="tplayico" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5.5c0-1.1 1.2-1.8 2.2-1.2l11 6.5c.9.6.9 2 0 2.5l-11 6.5c-1 .6-2.2-.1-2.2-1.2z"/></svg>';
-  $('tstatus').textContent = S.timer.rem>0 ? 'Pausado' : 'Pronto';
+  const old=$('tplayico');
+  if(old) old.outerHTML='<svg id="tplayico" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5.5c0-1.1 1.2-1.8 2.2-1.2l11 6.5c.9.6.9 2 0 2.5l-11 6.5c-1 .6-2.2-.1-2.2-1.2z"/></svg>';
+  $('tstatus').textContent=S.timer.rem>0?'Pausado':'Pronto';
 },
 
 resetTimer(){ App.stopTimer(); S.timer.rem=S.timer.total; App.updTimer(); $('tstatus').textContent='Pronto'; },
+bumpTimer(seconds){ S.timer.rem=Math.max(1,S.timer.rem+seconds); S.timer.total=Math.max(S.timer.total,S.timer.rem); App.updTimer(); },
 
-bumpTimer(seconds){
-  S.timer.rem = Math.max(1, S.timer.rem + seconds);
-  S.timer.total = Math.max(S.timer.total, S.timer.rem);
-  App.updTimer();
+// FIX 1: Notificação push quando o timer acaba em segundo plano
+sendTimerNotification(){
+  // Registra no painel interno sempre
+  App.notify('Timer finalizado', 'info');
+  // Dispara push se permissão concedida
+  if('Notification' in window && Notification.permission==='granted'){
+    const opts={
+      body:'Intervalo encerrado. Próxima série!',
+      icon:'icon.png', badge:'icon.png',
+      vibrate:[250,100,250]
+    };
+    if(navigator.serviceWorker?.controller){
+      navigator.serviceWorker.ready
+        .then(r=>r.showNotification('EVOLV — Timer',opts))
+        .catch(()=>new Notification('EVOLV — Timer',opts));
+    } else {
+      new Notification('EVOLV — Timer',opts);
+    }
+  }
+},
+
+// FIX 2: Solicita permissão para notificações push
+async requestNotifPermission(){
+  if(!('Notification' in window)){ App.toast('Browser não suporta notificações'); return; }
+  if(Notification.permission==='denied'){ App.toast('Permissão bloqueada — habilite no browser'); return; }
+  const r=await Notification.requestPermission();
+  if(r==='granted'){ App.notify('Notificações push ativadas!'); }
+  else { App.toast('Permissão negada no browser'); }
 },
 
 updTimer(){
-  const {total,rem} = S.timer;
-  const r=126; const C = 2*Math.PI*r;
+  const{total,rem}=S.timer;
+  const r=126; const C=2*Math.PI*r;
   const d=$('tdisplay'), ring=$('tring');
-  if(d) d.textContent = ft(rem);
+  if(d) d.textContent=ft(rem);
   if(ring){
-    const p = total>0 ? rem/total : 1;
-    ring.setAttribute('stroke-dasharray', C);
-    ring.setAttribute('stroke-dashoffset', C*(1-p));
-    ring.setAttribute('stroke', rem<=10 && rem>0 ? '#FF5577' : 'url(#tg)');
+    const p=total>0?rem/total:1;
+    ring.setAttribute('stroke-dasharray',C);
+    ring.setAttribute('stroke-dashoffset',C*(1-p));
+    ring.setAttribute('stroke',rem<=10&&rem>0?'#FF5577':'url(#tg)');
   }
 },
 
-// ─── SERIES counter ──────────────────────────────────────────────
+// ─── SERIES ──────────────────────────────────────────────────────
 addSeries(d){
-  S.series = Math.max(0, S.series + d);
+  S.series=Math.max(0,S.series+d);
   const el=$('sc-num');
-  if(el){
-    el.textContent = S.series;
-    el.style.color = S.series>0 ? 'var(--green)' : 'var(--t0)';
-    el.classList.add('bump');
-    setTimeout(()=>el.classList.remove('bump'), 160);
-  }
+  if(el){ el.textContent=S.series; el.style.color=S.series>0?'var(--green)':'var(--t0)'; el.classList.add('bump'); setTimeout(()=>el.classList.remove('bump'),160); }
 },
-
-resetSeries(){
-  S.series=0;
-  const el=$('sc-num');
-  if(el){ el.textContent=0; el.style.color='var(--t0)'; }
-},
+resetSeries(){ S.series=0; const el=$('sc-num'); if(el){el.textContent=0;el.style.color='var(--t0)';} },
 
 // ─── STATS ───────────────────────────────────────────────────────
 renderStats(){
-  const sess=DB.sessoes(), pesos=DB.pesos();
+  const sess=DB.sessoes(),pesos=DB.pesos();
   const root=$('stats-content');
-  if(!sess.length && !pesos.length){
-    root.innerHTML = `<div class="empty">
-      <div class="empty-ico">${IC.trendUp(28)}</div>
-      <div class="et">Sem dados ainda</div>
-      <div class="es">Registre treinos e pesagens<br>para ver suas estatísticas.</div>
-    </div>`;
+  if(!sess.length&&!pesos.length){
+    root.innerHTML=`<div class="empty"><div class="empty-ico">${IC.trendUp(28)}</div><div class="et">Sem dados ainda</div><div class="es">Registre treinos e pesagens<br>para ver suas estatísticas.</div></div>`;
     return;
   }
-
   const now=new Date();
-  // total counts
-  const total = sess.length;
-  const vol = sess.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
-  const series = sess.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).length,0),0);
-
-  // last 12 weeks volume (each week sum, current = last bar)
-  const weeks=[]; const weekLabels=[];
+  const total=sess.length;
+  const vol=sess.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
+  const series=sess.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).length,0),0);
+  const weeks=[],weekLabels=[];
   for(let i=11;i>=0;i--){
     const start=new Date(now); start.setDate(now.getDate()-(i*7+6));
-    const end=new Date(now);   end.setDate(now.getDate()-(i*7));
-    const v = sess.filter(s=>{const d=new Date(s.date);return d>=start&&d<=end;})
+    const end=new Date(now); end.setDate(now.getDate()-(i*7));
+    const v=sess.filter(s=>{const d=new Date(s.date);return d>=start&&d<=end;})
       .reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
     weeks.push(v); weekLabels.push(i===0?'agora':`-${i}s`);
   }
-  const maxW = Math.max(...weeks, 1);
-  const avgW = (weeks.reduce((a,b)=>a+b,0) / weeks.length) || 0;
-  const lastW = weeks[weeks.length-1];
-  const prevW = weeks[weeks.length-2] || 0;
-  const wDelta = prevW ? ((lastW - prevW)/prevW)*100 : 0;
-
-  // top exercises by total volume across all sessions
-  const byEx = {};
-  sess.forEach(s=>{ (s.exs||[]).forEach(e=>{
-    const v = (e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0);
-    if(!e.name) return;
-    byEx[e.name] = (byEx[e.name]||0) + v;
+  const maxW=Math.max(...weeks,1), avgW=(weeks.reduce((a,b)=>a+b,0)/weeks.length)||0;
+  const lastW=weeks[weeks.length-1], prevW=weeks[weeks.length-2]||0;
+  const wDelta=prevW?((lastW-prevW)/prevW)*100:0;
+  const byEx={};
+  sess.forEach(s=>{(s.exs||[]).forEach(e=>{
+    const v=(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0);
+    if(!e.name) return; byEx[e.name]=(byEx[e.name]||0)+v;
   });});
-  const topEx = Object.entries(byEx).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const topMax = topEx[0]?.[1] || 1;
+  const topEx=Object.entries(byEx).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const topMax=topEx[0]?.[1]||1;
 
-  root.innerHTML = `
+  root.innerHTML=`
     <div class="stats-hero">
       <div class="eyebrow">Estatísticas</div>
       <div class="h1" style="margin-top:4px">
@@ -639,13 +637,11 @@ renderStats(){
         ${total?`${series} séries · ${wDelta>=0?'+':''}${wDelta.toFixed(0)}% vs semana anterior`:'sem dados de treino'}
       </div>
     </div>
-
     <div class="srow">
       <div class="sc"><div class="sl">Treinos</div><div class="sv">${total}</div><div class="ss">total</div></div>
       <div class="sc"><div class="sl" style="color:var(--heat)">Volume</div><div class="sv">${vol>=1000?(vol/1000).toFixed(1):vol}<small>${vol>=1000?'t':'kg'}</small></div><div class="ss">total</div></div>
       <div class="sc"><div class="sl" style="color:var(--cool)">Séries</div><div class="sv">${series}</div><div class="ss">total</div></div>
     </div>
-
     <div class="card">
       <div class="between" style="margin-bottom:12px">
         <div>
@@ -655,13 +651,13 @@ renderStats(){
             <div class="meta">média</div>
           </div>
         </div>
-        ${wDelta>=0 ? `<div class="row" style="gap:4px;color:var(--green)">${IC.trendUp(14)}<span class="num" style="font-size:13px">+${wDelta.toFixed(0)}%</span></div>`
-                   : `<div class="row" style="gap:4px;color:var(--heat)">${IC.trendDown(14)}<span class="num" style="font-size:13px">${wDelta.toFixed(0)}%</span></div>`}
+        ${wDelta>=0
+          ?`<div class="row" style="gap:4px;color:var(--green)">${IC.trendUp(14)}<span class="num" style="font-size:13px">+${wDelta.toFixed(0)}%</span></div>`
+          :`<div class="row" style="gap:4px;color:var(--heat)">${IC.trendDown(14)}<span class="num" style="font-size:13px">${wDelta.toFixed(0)}%</span></div>`}
       </div>
       <div class="bar-chart">
         ${weeks.map((v,i)=>{
-          const h = (v/maxW)*100;
-          const cur = i===weeks.length-1;
+          const h=(v/maxW)*100, cur=i===weeks.length-1;
           return `<div class="bar-col ${cur?'cur':''}">
             <div class="bar" style="height:${h}%;min-height:${v?4:2}px"></div>
             <div class="blabel">${i===0?'-11':i===weeks.length-1?'agora':''}</div>
@@ -669,63 +665,38 @@ renderStats(){
         }).join('')}
       </div>
     </div>
-
-    ${pesos.length>=2 ? `
+    ${pesos.length>=2?`
     <div class="card">
       <div class="eyebrow">Evolução do peso</div>
       <div class="row" style="gap:6px;margin-top:6px;align-items:baseline">
         <div class="num" style="font-size:22px">${pesos[pesos.length-1].w}<small style="font-size:13px;color:var(--t2);font-weight:500;margin-left:2px">kg</small></div>
-        ${(() => {
-          const first=pesos[0].w, last=pesos[pesos.length-1].w, diff=(last-first).toFixed(1);
-          const cls = diff>0?'color:var(--heat)':'color:var(--cool)';
-          return `<div class="meta" style="${cls}">${diff>0?'+':''}${diff}kg · ${pesos.length} pesagens</div>`;
-        })()}
+        ${(()=>{const first=pesos[0].w,last=pesos[pesos.length-1].w,diff=(last-first).toFixed(1);const cls=diff>0?'color:var(--heat)':'color:var(--cool)';return `<div class="meta" style="${cls}">${diff>0?'+':''}${diff}kg · ${pesos.length} pesagens</div>`;})()}
       </div>
       <div class="cwrap" style="margin-top:8px"><canvas id="ch-pe"></canvas></div>
-    </div>` : ''}
-
-    ${topEx.length ? `
+    </div>`:''}
+    ${topEx.length?`
     <div class="eyebrow" style="margin:22px 0 10px">Exercícios · top volume</div>
     <div>
-      ${topEx.map(([n,v])=>{
-        const pct = (v/topMax)*100;
-        return `<div class="lb-row">
-          <div class="lb-head">
-            <div class="lb-name">${n}</div>
-            <div class="lb-val">${v>=1000?(v/1000).toFixed(1)+'t':v+'kg'}</div>
-          </div>
-          <div class="lb-bar"><div class="lb-fill" style="width:${pct}%"></div></div>
-        </div>`;
-      }).join('')}
-    </div>` : ''}
+      ${topEx.map(([n,v])=>{const pct=(v/topMax)*100;return `<div class="lb-row"><div class="lb-head"><div class="lb-name">${n}</div><div class="lb-val">${v>=1000?(v/1000).toFixed(1)+'t':v+'kg'}</div></div><div class="lb-bar"><div class="lb-fill" style="width:${pct}%"></div></div></div>`;}).join('')}
+    </div>`:''}
   `;
 
-  // peso chart
   setTimeout(()=>{
     Object.values(S.charts).forEach(c=>{try{c.destroy()}catch{}}); S.charts={};
-    if($('ch-pe') && pesos.length>=2){
+    if($('ch-pe')&&pesos.length>=2){
       const lp=pesos.slice(-24);
-      const op={...CDO, scales:{...CDO.scales, y:{...CDO.scales.y, beginAtZero:false}}};
-      S.charts.pe = new Chart($('ch-pe'),{
-        type:'line',
-        data:{labels:lp.map(p=>fd(p.date)),datasets:[{
-          data:lp.map(p=>p.w),
-          borderColor:ACCENT, backgroundColor:'rgba(31,224,122,0.08)',
-          fill:true, tension:0.35, pointRadius:3, pointBackgroundColor:ACCENT, borderWidth:2,
-        }]},
-        options:op,
-      });
+      const op={...CDO,scales:{...CDO.scales,y:{...CDO.scales.y,beginAtZero:false}}};
+      S.charts.pe=new Chart($('ch-pe'),{type:'line',data:{labels:lp.map(p=>fd(p.date)),datasets:[{data:lp.map(p=>p.w),borderColor:ACCENT,backgroundColor:'rgba(31,224,122,0.08)',fill:true,tension:0.35,pointRadius:3,pointBackgroundColor:ACCENT,borderWidth:2}]},options:op});
     }
-  }, 50);
+  },50);
 },
 
 // ─── PESO ────────────────────────────────────────────────────────
 renderPeso(){
   const pesos=DB.pesos();
   const root=$('peso-content');
-  // setup form (sheet trigger + minimal info) — main UI is data viz
   if(!pesos.length){
-    root.innerHTML = `
+    root.innerHTML=`
       <div class="peso-cur">
         <div class="eyebrow">Peso</div>
         <div class="h1" style="font-size:24px;margin-top:6px">Sem dados ainda</div>
@@ -740,36 +711,41 @@ renderPeso(){
     return;
   }
 
-  const cur = pesos[pesos.length-1];
-  const first = pesos[0];
-  const delta = (cur.w - first.w).toFixed(1);
-  const deltaCls = +delta > 0 ? 'up' : '';
-  const deltaIco = +delta > 0 ? IC.arrowUp(11) : IC.arrowDown(11);
+  const cur=pesos[pesos.length-1], first=pesos[0];
+  const delta=(cur.w-first.w).toFixed(1);
+  const deltaCls=+delta>0?'up':'';
 
-  // last 7d avg
-  const last7 = pesos.slice(-7);
-  const avg7 = last7.reduce((a,p)=>a+p.w,0) / last7.length;
-  const minW = Math.min(...pesos.map(p=>p.w));
-  const variation = ((cur.w - first.w) / first.w * 100).toFixed(1);
+  const last7=pesos.slice(-7);
+  const avg7=last7.reduce((a,p)=>a+p.w,0)/last7.length;
+  const minW=Math.min(...pesos.map(p=>p.w));
+  const variation=((cur.w-first.w)/first.w*100).toFixed(1);
 
-  // goal: simple inference — round down to nearest .5
-  const goal = +localStorage.getItem('evolv_peso_goal') || Math.floor(Math.min(cur.w, first.w) * 2 - 4) / 2;
-  const progress = Math.min(1, Math.max(0, (first.w - cur.w) / Math.max(0.1, first.w - goal)));
+  // FIX 5: Cálculo correto da meta — 5% abaixo do peso atual como padrão
+  const savedGoal=+localStorage.getItem('evolv_peso_goal');
+  const goal=savedGoal||Math.round(cur.w*0.95*2)/2;
 
-  root.innerHTML = `
+  const progress=Math.min(1,Math.max(0,(first.w-cur.w)/Math.max(0.1,first.w-goal)));
+
+  root.innerHTML=`
     <div class="peso-cur">
-      <div class="eyebrow">Peso atual</div>
+      <div class="between">
+        <div class="eyebrow">Peso atual</div>
+        <button onclick="App.showWeightGoalModal()" style="display:flex;align-items:center;gap:5px;color:var(--green);font-size:12px;background:none;border:1px solid var(--green-line);border-radius:8px;padding:4px 10px;cursor:pointer;font-family:inherit">
+          ${IC.target(13)} Meta: ${goal.toFixed(1)}kg
+        </button>
+      </div>
       <div class="pcr" style="margin-top:4px">
         <div class="pcv">${cur.w.toFixed(1)}<small>kg</small></div>
-        ${delta!=='0.0' ? `<div class="pdelta ${deltaCls}">${deltaIco}${Math.abs(delta)}kg</div>` : ''}
+        ${delta!=='0.0'?`<div class="pdelta ${deltaCls}">${+delta>0?IC.arrowUp(11):IC.arrowDown(11)}${Math.abs(delta)}kg</div>`:''}
       </div>
       <div class="meta" style="margin-top:6px">
-        em ${pesos.length} pesagens · meta ${goal.toFixed(1)}kg ${cur.w>goal?`(faltam ${(cur.w-goal).toFixed(1)}kg)`:'atingida!'}
+        ${pesos.length} pesagens ·
+        ${cur.w>goal
+          ?`faltam <strong style="color:var(--cool)">${(cur.w-goal).toFixed(1)}kg</strong> para a meta`
+          :`<span style="color:var(--green)">meta atingida!</span>`}
       </div>
-
-      <div class="peso-goal-bar">
+      <div class="peso-goal-bar" style="margin-top:12px">
         <div class="peso-goal-fill" style="width:${progress*100}%"></div>
-        <div class="peso-goal-mark" style="right:0"></div>
       </div>
       <div class="peso-goal-row">
         <span class="mono">${first.w.toFixed(1)} início</span>
@@ -793,63 +769,45 @@ renderPeso(){
     <button class="btn bp lg" onclick="App.showWeighIn()" style="margin-top:16px">${IC.plus(16)} Registrar pesagem</button>
 
     <div class="eyebrow" style="margin-top:22px;margin-bottom:10px">Histórico</div>
-    <div class="card">
-      <div id="peso-hist"></div>
-    </div>
+    <div class="card"><div id="peso-hist"></div></div>
   `;
 
-  // history rows
-  const hist = $('peso-hist');
-  hist.innerHTML = pesos.slice(-30).reverse().map((p,i,arr)=>{
-    const prev = arr[i+1];
-    const diff = prev ? (p.w-prev.w).toFixed(1) : null;
-    const cls = diff===null?'eq':+diff>0?'up':+diff<0?'dn':'eq';
-    const d = new Date(p.date+(p.date.length===10?'T12:00':''));
-    const dayLabel = i===0 ? 'Hoje' : i===1 ? 'Antes' : fd(p.date);
+  const hist=$('peso-hist');
+  hist.innerHTML=pesos.slice(-30).reverse().map((p,i,arr)=>{
+    const prev=arr[i+1];
+    const diff=prev?(p.w-prev.w).toFixed(1):null;
+    const cls=diff===null?'eq':+diff>0?'up':+diff<0?'dn':'eq';
+    const d=new Date(p.date+(p.date.length===10?'T12:00':''));
+    const dayLabel=i===0?'Hoje':i===1?'Antes':fd(p.date);
     return `<div class="prow">
-      <div class="pday">
-        <div class="pday-d">${dayLabel}</div>
-        <div class="pday-t mono">${d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})}</div>
-      </div>
+      <div class="pday"><div class="pday-d">${dayLabel}</div><div class="pday-t mono">${d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})}</div></div>
       <div class="pdata">
-        <div>
-          <span class="pval">${p.w.toFixed(1)}<small>kg</small></span>
-          ${diff!==null ? `<span class="pdif ${cls}">${diff>0?'+':''}${diff}</span>` : ''}
-        </div>
-        ${p.obs ? `<div class="pobs">${p.obs}</div>` : ''}
+        <div><span class="pval">${p.w.toFixed(1)}<small>kg</small></span>${diff!==null?`<span class="pdif ${cls}">${+diff>0?'+':''}${diff}</span>`:''}</div>
+        ${p.obs?`<div class="pobs">${p.obs}</div>`:''}
       </div>
-      ${p.period ? `<div class="pper">${p.period}</div>` : ''}
+      ${p.period?`<div class="pper">${p.period}</div>`:''}
       <div class="del" onclick="App.delPeso('${p.id}')" title="Excluir">${IC.trash(13)}</div>
     </div>`;
   }).join('');
 
-  // chart
   setTimeout(()=>{
     if(S.charts.peso){try{S.charts.peso.destroy()}catch{}delete S.charts.peso;}
     const cw=$('peso-chart');
-    if(cw && pesos.length>=2){
+    if(cw&&pesos.length>=2){
       const lp=pesos.slice(-24);
-      const op={...CDO, scales:{...CDO.scales, y:{...CDO.scales.y, beginAtZero:false}}};
-      S.charts.peso = new Chart(cw,{
-        type:'line',
-        data:{labels:lp.map(p=>fd(p.date)),datasets:[{
-          data:lp.map(p=>p.w),
-          borderColor:COOL, backgroundColor:'rgba(107,168,255,0.1)',
-          fill:true, tension:0.35, pointRadius:3, pointBackgroundColor:COOL, borderWidth:2,
-        }]},
-        options:op,
-      });
+      const op={...CDO,scales:{...CDO.scales,y:{...CDO.scales.y,beginAtZero:false}}};
+      S.charts.peso=new Chart(cw,{type:'line',data:{labels:lp.map(p=>fd(p.date)),datasets:[{data:lp.map(p=>p.w),borderColor:COOL,backgroundColor:'rgba(107,168,255,0.1)',fill:true,tension:0.35,pointRadius:3,pointBackgroundColor:COOL,borderWidth:2}]},options:op});
     } else if(cw){
       cw.parentElement.innerHTML='<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--t2);font-size:13px">Registre ao menos 2 pesagens para ver o gráfico</div>';
     }
-  }, 50);
+  },50);
 },
 
 // ─── WEIGH-IN MODAL ──────────────────────────────────────────────
 showWeighIn(){
   App.closeModal();
-  const m=document.createElement('div'); m.className='mo';
-  m.innerHTML = `<div class="md">
+  const m=document.createElement('div');m.className='mo';
+  m.innerHTML=`<div class="md">
     <div class="mhandle"></div>
     <div class="mtitle">Registrar pesagem</div>
     <div class="ig"><label>Peso (kg)</label>
@@ -867,32 +825,25 @@ showWeighIn(){
         </select>
       </div>
     </div>
-    <div class="ig"><label>Obs (opcional)</label>
-      <input type="text" id="p-obs" placeholder="Anotação livre...">
-    </div>
+    <div class="ig"><label>Obs (opcional)</label><input type="text" id="p-obs" placeholder="Anotação livre..."></div>
     <button class="btn bp lg" onclick="App.savePeso()">${IC.check(16)} Salvar pesagem</button>
     <button class="btn bg" onclick="App.closeModal()" style="margin-top:8px">Cancelar</button>
   </div>`;
   m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
   $('mroot').appendChild(m);
-  setTimeout(()=>{
-    if($('p-date')) $('p-date').value = today();
-    $('p-weight')?.focus();
-  }, 200);
+  setTimeout(()=>{ if($('p-date'))$('p-date').value=today(); $('p-weight')?.focus(); },200);
 },
 
 async savePeso(){
-  const w = parseFloat($('p-weight')?.value);
-  const date = $('p-date')?.value || today();
-  const obs = $('p-obs')?.value?.trim() || '';
-  const period = $('p-period')?.value || '';
-  if(!w || w<30 || w>300){ App.toast('Informe um peso válido'); return; }
+  const w=parseFloat($('p-weight')?.value);
+  const date=$('p-date')?.value||today();
+  const obs=$('p-obs')?.value?.trim()||'';
+  const period=$('p-period')?.value||'';
+  if(!w||w<30||w>300){App.toast('Informe um peso válido');return;}
   try{
-    await DB.addPeso({id:uid(), w, date, obs, period});
-    App.closeModal();
-    App.toast(`${w}kg registrado!`);
-    App.renderPeso();
-  } catch(e){ App.toast('Erro ao salvar.'); }
+    await DB.addPeso({id:uid(),w,date,obs,period});
+    App.closeModal(); App.toast(`${w}kg registrado!`); App.renderPeso();
+  }catch(e){App.toast('Erro ao salvar.');}
 },
 
 async delPeso(id){
@@ -900,11 +851,50 @@ async delPeso(id){
   await DB.delPeso(id); App.renderPeso();
 },
 
+// FIX 6: Modal para editar meta de peso
+showWeightGoalModal(){
+  App.closeModal();
+  const pesos=DB.pesos();
+  const cur=pesos.length?pesos[pesos.length-1].w:0;
+  const savedGoal=localStorage.getItem('evolv_peso_goal')||'';
+  const m=document.createElement('div');m.className='mo';
+  m.innerHTML=`<div class="md">
+    <div class="mhandle"></div>
+    <div class="mtitle">Definir meta de peso</div>
+    <div class="ig"><label>Meta (kg)</label>
+      <input type="number" id="goal-input" placeholder="ex: 75.0" step="0.5" min="30" max="300" value="${savedGoal}" inputmode="decimal">
+    </div>
+    <div style="background:var(--bg-3);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:16px">
+      <div style="font-size:12px;color:var(--t2);margin-bottom:4px">Peso atual</div>
+      <div class="num" style="font-size:24px">${cur}<small style="font-size:14px;color:var(--t2);font-weight:500;margin-left:4px">kg</small></div>
+      ${savedGoal?`<div class="meta" style="margin-top:4px">Meta atual: <strong style="color:var(--green)">${(+savedGoal).toFixed(1)}kg</strong></div>`:''}
+    </div>
+    <button class="btn bp lg" onclick="App.saveWeightGoal()">${IC.check(16)} Salvar meta</button>
+    ${savedGoal?`<button class="btn bg" onclick="App.clearWeightGoal()" style="margin-top:8px">Remover meta</button>`:''}
+    <button class="btn bg" onclick="App.closeModal()" style="margin-top:8px">Cancelar</button>
+  </div>`;
+  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
+  $('mroot').appendChild(m);
+  setTimeout(()=>$('goal-input')?.focus(),200);
+},
+
+saveWeightGoal(){
+  const v=parseFloat($('goal-input')?.value);
+  if(!v||v<30||v>300){App.toast('Informe um peso válido');return;}
+  localStorage.setItem('evolv_peso_goal',v);
+  App.closeModal(); App.toast(`Meta: ${v.toFixed(1)}kg definida!`); App.renderPeso();
+},
+
+clearWeightGoal(){
+  localStorage.removeItem('evolv_peso_goal');
+  App.closeModal(); App.toast('Meta removida.'); App.renderPeso();
+},
+
 // ─── FICHA CRUD ──────────────────────────────────────────────────
 showAddFicha(ficha=null){
   App.closeModal();
-  const m=document.createElement('div'); m.className='mo';
-  m.innerHTML = `<div class="md">
+  const m=document.createElement('div');m.className='mo';
+  m.innerHTML=`<div class="md">
     <div class="mhandle"></div>
     <div class="mtitle">${ficha?'Editar ficha':'Nova ficha'}</div>
     <div class="ig"><label>Nome da ficha</label>
@@ -917,32 +907,29 @@ showAddFicha(ficha=null){
   </div>`;
   m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
   $('mroot').appendChild(m);
-  setTimeout(()=>$('f-name')?.focus(), 250);
-
+  setTimeout(()=>$('f-name')?.focus(),250);
   if(ficha) setTimeout(()=>{
     (ficha.days||[]).forEach(day=>{
       App.addDay();
-      const blocks = document.querySelectorAll('#f-days .db');
-      const b = blocks[blocks.length-1];
-      b.querySelector('.db-name').value = day.name||'';
+      const blocks=document.querySelectorAll('#f-days .db');
+      const b=blocks[blocks.length-1];
+      b.querySelector('.db-name').value=day.name||'';
       (day.exs||[]).forEach(ex=>{
         App.addExRow(b.querySelector('.ex-list'));
-        const rows = b.querySelectorAll('.ex-row');
-        const r = rows[rows.length-1];
-        r.querySelector('.en').value = ex.name||'';
-        r.querySelector('.es').value = ex.sets||3;
-        r.querySelector('.er').value = ex.reps||12;
+        const rows=b.querySelectorAll('.ex-row');
+        const r=rows[rows.length-1];
+        r.querySelector('.en').value=ex.name||'';
+        r.querySelector('.es').value=ex.sets||3;
+        r.querySelector('.er').value=ex.reps||12;
       });
     });
-  }, 100);
+  },100);
 },
 
 addDay(){
-  const cont = $('f-days');
-  const n = cont.querySelectorAll('.db').length + 1;
-  const db = document.createElement('div');
-  db.className='db';
-  db.innerHTML = `
+  const cont=$('f-days'), n=cont.querySelectorAll('.db').length+1;
+  const db=document.createElement('div'); db.className='db';
+  db.innerHTML=`
     <div class="db-hdr">
       <span class="db-lbl">DIA ${n}</span>
       <input type="text" class="db-name" placeholder="Nome (ex: Peito/Tríceps)">
@@ -955,9 +942,8 @@ addDay(){
 },
 
 addExRow(list){
-  const r=document.createElement('div');
-  r.className='ex-row';
-  r.innerHTML = `
+  const r=document.createElement('div'); r.className='ex-row';
+  r.innerHTML=`
     <input type="text" class="en" placeholder="Exercício">
     <input type="number" class="es" placeholder="Sér" value="3" min="1">
     <input type="number" class="er" placeholder="Rep" value="12" min="1">
@@ -967,41 +953,68 @@ addExRow(list){
 },
 
 async saveFicha(editId){
-  const name = $('f-name')?.value?.trim();
-  if(!name){ App.toast('Digite o nome da ficha'); return; }
-  const days = [...document.querySelectorAll('#f-days .db')].map((b,i)=>({
-    name: b.querySelector('.db-name')?.value?.trim() || `Dia ${i+1}`,
-    exs: [...b.querySelectorAll('.ex-row')].map(r=>({
-      name: r.querySelector('.en')?.value?.trim()||'',
-      sets: +r.querySelector('.es')?.value || 3,
-      reps: +r.querySelector('.er')?.value || 12,
-      w: 0,
+  const name=$('f-name')?.value?.trim();
+  if(!name){App.toast('Digite o nome da ficha');return;}
+  const days=[...document.querySelectorAll('#f-days .db')].map((b,i)=>({
+    name:b.querySelector('.db-name')?.value?.trim()||`Dia ${i+1}`,
+    exs:[...b.querySelectorAll('.ex-row')].map(r=>({
+      name:r.querySelector('.en')?.value?.trim()||'',
+      sets:+r.querySelector('.es')?.value||3,
+      reps:+r.querySelector('.er')?.value||12,
+      w:0,
     })).filter(e=>e.name)
   }));
   try{
-    if(editId) await DB.updFicha(editId, {name, days, updAt:Date.now()});
-    else        await DB.addFicha({id:uid(), name, days, at:Date.now()});
-    App.closeModal(); App.renderFichas();
-    App.notify(editId ? 'Ficha atualizada!' : 'Ficha criada!');
-  } catch(e){ App.toast('Erro ao salvar.'); }
+    if(editId) await DB.updFicha(editId,{name,days,updAt:Date.now()});
+    else       await DB.addFicha({id:uid(),name,days,at:Date.now()});
+    App.closeModal(); App.renderFichas(); App.notify(editId?'Ficha atualizada!':'Ficha criada!');
+  }catch(e){App.toast('Erro ao salvar.');}
 },
 
-editFicha(id){
-  const f = DB.fichas().find(x=>x.id===id);
-  if(f) App.showAddFicha(f);
-},
+editFicha(id){ const f=DB.fichas().find(x=>x.id===id); if(f)App.showAddFicha(f); },
 
 async delFicha(id){
   if(!confirm('Excluir esta ficha?')) return;
-  try{ await DB.delFicha(id); App.toast('Ficha excluída'); }
-  catch(e){ App.toast('Erro ao excluir.'); }
+  try{await DB.delFicha(id);App.toast('Ficha excluída');}
+  catch(e){App.toast('Erro ao excluir.');}
 },
 
-// ─── IMPORT ──────────────────────────────────────────────────────
+// ─── FIX 4: EXPORT / IMPORT ──────────────────────────────────────
+exportFichas(){
+  const fichas=DB.fichas();
+  if(!fichas.length){App.toast('Nenhuma ficha para exportar');return;}
+  const data={
+    evolv_export:true,
+    exported_at:new Date().toISOString(),
+    fichas:fichas.map(f=>({name:f.name,days:f.days}))
+  };
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+  a.download=`evolv-fichas-${today()}.json`;
+  a.click();
+  App.toast('Fichas exportadas!');
+},
+
+downloadTemplate(){
+  const tmpl={evolv_export:true,fichas:[{
+    name:"Hipertrofia ABC",
+    days:[
+      {name:"Treino A — Peito/Tríceps",exs:[{name:"Supino Reto",sets:4,reps:10},{name:"Supino Inclinado",sets:3,reps:12},{name:"Crucifixo",sets:3,reps:15},{name:"Tríceps Corda",sets:3,reps:12}]},
+      {name:"Treino B — Costas/Bíceps",exs:[{name:"Remada Curvada",sets:4,reps:10},{name:"Puxada Frente",sets:3,reps:12},{name:"Rosca Direta",sets:3,reps:12},{name:"Rosca Martelo",sets:3,reps:12}]},
+      {name:"Treino C — Pernas",exs:[{name:"Agachamento Livre",sets:4,reps:10},{name:"Leg Press",sets:4,reps:12},{name:"Extensora",sets:3,reps:15},{name:"Panturrilha",sets:4,reps:20}]}
+    ]
+  }]};
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(tmpl,null,2)],{type:'application/json'}));
+  a.download='evolv-modelo.json';
+  a.click();
+  App.toast('Modelo baixado!');
+},
+
 showImportFicha(){
   App.closeModal();
-  const m=document.createElement('div'); m.className='mo';
-  m.innerHTML = `<div class="md">
+  const m=document.createElement('div');m.className='mo';
+  m.innerHTML=`<div class="md">
     <div class="mhandle"></div>
     <div class="mtitle">Importar fichas JSON</div>
     <div class="ig"><label>Cole o JSON abaixo</label>
@@ -1009,6 +1022,7 @@ showImportFicha(){
     </div>
     <button class="btn bp" onclick="App.importFichasFromJson(document.getElementById('import-json').value)">Importar</button>
     <button class="btn bg" onclick="App.importFileSelector()" style="margin-top:8px">${IC.download(14)} Selecionar arquivo</button>
+    <button class="btn bg" onclick="App.downloadTemplate()" style="margin-top:8px">${IC.info(14)} Baixar modelo</button>
     <button class="btn bg" onclick="App.closeModal()" style="margin-top:8px">Cancelar</button>
   </div>`;
   m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
@@ -1016,78 +1030,63 @@ showImportFicha(){
 },
 
 handleImportFile(e){
-  const file = e.target.files?.[0];
-  if(!file) return;
-  const reader = new FileReader();
-  reader.onload = () => App.importFichasFromJson(reader.result);
-  reader.onerror = () => App.toast('Não foi possível ler o arquivo.');
-  reader.readAsText(file, 'UTF-8');
-  e.target.value = '';
+  const file=e.target.files?.[0]; if(!file)return;
+  const reader=new FileReader();
+  reader.onload=()=>App.importFichasFromJson(reader.result);
+  reader.onerror=()=>App.toast('Não foi possível ler o arquivo.');
+  reader.readAsText(file,'UTF-8'); e.target.value='';
 },
 
 importFileSelector(){ $('import-file-input')?.click(); },
 
 async importFichasFromJson(raw){
   App.closeModal();
-  if(!raw || !raw.trim()){ App.toast('Cole um JSON válido.'); return; }
+  if(!raw||!raw.trim()){App.toast('Cole um JSON válido.');return;}
   try{
-    const data = JSON.parse(raw);
-    const itens = Array.isArray(data) ? data : (data.fichas ? data.fichas : [data]);
-    const valid = itens.filter(f=>f && f.name && Array.isArray(f.days));
-    if(!valid.length){ App.toast('Nenhum objeto de ficha válido.'); return; }
-    let imported = 0;
+    const data=JSON.parse(raw);
+    const itens=Array.isArray(data)?data:(data.fichas?data.fichas:[data]);
+    const valid=itens.filter(f=>f&&f.name&&Array.isArray(f.days));
+    if(!valid.length){App.toast('Nenhum objeto de ficha válido.');return;}
+    let imported=0;
     for(const ficha of valid){
-      const item = {
+      const item={
         ...ficha,
-        days: ficha.days.map(d=>({
-          name: d.name||'Dia',
-          exs: (Array.isArray(d.exs)?d.exs:[]).map(e=>({
-            name: e.name||'', sets: +e.sets||3, reps: +e.reps||12, w: +e.w||0
-          }))
+        days:ficha.days.map(d=>({
+          name:d.name||'Dia',
+          exs:(Array.isArray(d.exs)?d.exs:[]).map(e=>({name:e.name||'',sets:+e.sets||3,reps:+e.reps||12,w:+e.w||0}))
         })),
-        id: ficha.id || uid(),
-        at: Date.now()
+        id:ficha.id||uid(),at:Date.now()
       };
-      if(DB.fichas().some(x=>x.id===item.id)) item.id = uid();
-      await DB.addFicha(item);
-      imported++;
+      if(DB.fichas().some(x=>x.id===item.id)) item.id=uid();
+      await DB.addFicha(item); imported++;
     }
     App.renderFichas();
     App.notify(`${imported} ${imported===1?'ficha importada':'fichas importadas'}.`);
-  } catch(e){ App.toast('JSON inválido. Verifique e tente novamente.'); }
+  }catch(e){App.toast('JSON inválido. Verifique e tente novamente.');}
 },
 
 // ─── ACTIVE WORKOUT ──────────────────────────────────────────────
 startTodayWorkout(){
-  if(!DB.fichas().length){
-    App.toast('Crie uma ficha de treino primeiro!');
-    App.nav('fichas');
-    return;
-  }
+  if(!DB.fichas().length){App.toast('Crie uma ficha de treino primeiro!');App.nav('fichas');return;}
   App.showPickModal();
 },
 
 showPickModal(){
   App.closeModal();
   const fichas=DB.fichas();
-  const m=document.createElement('div'); m.className='mo';
-  m.innerHTML = `<div class="md">
+  const m=document.createElement('div');m.className='mo';
+  m.innerHTML=`<div class="md">
     <div class="mhandle"></div>
     <div class="mtitle">Selecionar treino</div>
     ${fichas.map((f,fi)=>{
-      const color = S.fichaColors[fi % S.fichaColors.length];
-      const tag = String.fromCharCode(65+fi);
+      const color=S.fichaColors[fi%S.fichaColors.length];
+      const tag=String.fromCharCode(65+fi);
       return `<div style="margin-bottom:16px">
-        <div class="eyebrow" style="margin-bottom:8px">
-          <span style="color:${color}">${tag}</span> · ${f.name}
-        </div>
+        <div class="eyebrow" style="margin-bottom:8px"><span style="color:${color}">${tag}</span> · ${f.name}</div>
         ${(f.days||[]).map((d,di)=>`
           <div class="wi" onclick="App.startWorkout('${f.id}',${di});App.closeModal()">
             <div class="wi-ico" style="background:color-mix(in oklab, ${color} 14%, transparent);color:${color};border-color:color-mix(in oklab, ${color} 32%, transparent)">${di+1}</div>
-            <div class="wi-info">
-              <div class="wi-name">${d.name}</div>
-              <div class="wi-sub">${(d.exs||[]).length} exercícios</div>
-            </div>
+            <div class="wi-info"><div class="wi-name">${d.name}</div><div class="wi-sub">${(d.exs||[]).length} exercícios</div></div>
             <div style="color:var(--green);display:flex">${IC.play(14)}</div>
           </div>
         `).join('')}
@@ -1099,49 +1098,33 @@ showPickModal(){
   $('mroot').appendChild(m);
 },
 
-startWorkout(fichaId, dayIdx){
-  const f = DB.fichas().find(x=>x.id===fichaId);
-  const d = f?.days?.[dayIdx];
-  if(!d) return;
+startWorkout(fichaId,dayIdx){
+  const f=DB.fichas().find(x=>x.id===fichaId);
+  const d=f?.days?.[dayIdx]; if(!d)return;
   App.closeModal();
-  S.workout = {
-    on:true, fichaId, dayIdx, t0:Date.now(), iv:null,
-    exs: (d.exs||[]).map(e=>({
-      name: e.name, ts: e.sets||3, tr: e.reps||12,
-      sets: Array.from({length:e.sets||3}, ()=>({reps: e.reps||12, w: 0, done: false}))
-    }))
-  };
-  $('aw').classList.add('open');
-  $('aw-title').textContent = d.name;
-  S.workout.iv = setInterval(()=>{
-    const el=$('aw-timer'); if(el) el.textContent = ft(Math.floor((Date.now()-S.workout.t0)/1000));
-  }, 1000);
+  S.workout={on:true,fichaId,dayIdx,t0:Date.now(),iv:null,
+    exs:(d.exs||[]).map(e=>({name:e.name,ts:e.sets||3,tr:e.reps||12,sets:Array.from({length:e.sets||3},()=>({reps:e.reps||12,w:0,done:false}))}))};
+  $('aw').classList.add('open'); $('aw-title').textContent=d.name;
+  S.workout.iv=setInterval(()=>{const el=$('aw-timer');if(el)el.textContent=ft(Math.floor((Date.now()-S.workout.t0)/1000));},1000);
   App.renderAW();
 },
 
 renderAW(){
-  const {exs} = S.workout;
-  const done = exs.reduce((a,e)=>a+e.sets.filter(s=>s.done).length, 0);
-  const total = exs.reduce((a,e)=>a+e.sets.length, 0);
-  $('aw-sub').textContent = `${exs.length} exercícios · ${done}/${total} séries`;
-  $('aw-pbar').style.width = total ? `${(done/total)*100}%` : '0%';
-  $('aw-body').innerHTML = exs.map((ex,ei)=>{
-    const allDone = ex.sets.every(s=>s.done);
+  const{exs}=S.workout;
+  const done=exs.reduce((a,e)=>a+e.sets.filter(s=>s.done).length,0);
+  const total=exs.reduce((a,e)=>a+e.sets.length,0);
+  $('aw-sub').textContent=`${exs.length} exercícios · ${done}/${total} séries`;
+  $('aw-pbar').style.width=total?`${(done/total)*100}%`:'0%';
+  $('aw-body').innerHTML=exs.map((ex,ei)=>{
+    const allDone=ex.sets.every(s=>s.done);
     return `<div class="ex-card ${allDone?'glow':''}">
-      <div class="ex-hdr">
-        <div class="ex-name">${ex.name}</div>
-        <span class="ex-tag">${ex.sets.filter(s=>s.done).length}/${ex.sets.length}</span>
-      </div>
+      <div class="ex-hdr"><div class="ex-name">${ex.name}</div><span class="ex-tag">${ex.sets.filter(s=>s.done).length}/${ex.sets.length}</span></div>
       <div class="sets-hdr"><span></span><span>Carga (kg)</span><span>Reps</span><span></span></div>
       ${ex.sets.map((s,si)=>`
         <div class="set-row">
           <div class="sn">${si+1}</div>
-          <input type="number" value="${s.w||''}" placeholder="0" min="0" step="0.5"
-            onchange="App.updSet(${ei},${si},'w',this.value)" inputmode="decimal"
-            style="${s.done?'opacity:0.45':''}">
-          <input type="number" value="${s.reps||''}" placeholder="${ex.tr}" min="1"
-            onchange="App.updSet(${ei},${si},'reps',this.value)" inputmode="numeric"
-            style="${s.done?'opacity:0.45':''}">
+          <input type="number" value="${s.w||''}" placeholder="0" min="0" step="0.5" onchange="App.updSet(${ei},${si},'w',this.value)" inputmode="decimal" style="${s.done?'opacity:0.45':''}">
+          <input type="number" value="${s.reps||''}" placeholder="${ex.tr}" min="1" onchange="App.updSet(${ei},${si},'reps',this.value)" inputmode="numeric" style="${s.done?'opacity:0.45':''}">
           <div class="set-chk ${s.done?'done':''}" onclick="App.togSet(${ei},${si})">${s.done?IC.check(16):''}</div>
         </div>`).join('')}
       <button class="btn bg sm" onclick="App.addSet(${ei})" style="width:auto;padding:0 12px;margin-top:6px">${IC.plus(12)} Série</button>
@@ -1149,71 +1132,66 @@ renderAW(){
   }).join('');
 },
 
-updSet(ei,si,f,v){ S.workout.exs[ei].sets[si][f] = +v; },
-
+updSet(ei,si,f,v){ S.workout.exs[ei].sets[si][f]=+v; },
 togSet(ei,si){
-  const s = S.workout.exs[ei].sets[si];
-  s.done = !s.done;
-  App.renderAW();
-  if(s.done){
-    App.addSeries(1);
-    App.resetTimer(); App.startTimer();
-    App.toast('Timer iniciado!');
-  }
+  const s=S.workout.exs[ei].sets[si]; s.done=!s.done; App.renderAW();
+  if(s.done){ App.addSeries(1); App.resetTimer(); App.startTimer(); App.toast('Timer iniciado!'); }
 },
-
-addSet(ei){
-  const e = S.workout.exs[ei];
-  e.sets.push({reps: e.tr, w: 0, done: false});
-  App.renderAW();
-},
-
-cancelWorkout(){ if(!confirm('Descartar treino?')) return; App._endWO(false); },
+addSet(ei){ const e=S.workout.exs[ei]; e.sets.push({reps:e.tr,w:0,done:false}); App.renderAW(); },
+cancelWorkout(){ if(!confirm('Descartar treino?'))return; App._endWO(false); },
 finishWorkout(){ App._endWO(true); },
 
 async _endWO(save){
   clearInterval(S.workout.iv);
   if(save){
     try{
-      await DB.addSessao({
-        id:uid(),
-        fichaId:S.workout.fichaId,
-        dayIdx:S.workout.dayIdx,
-        date:new Date().toISOString(),
-        dur:Math.floor((Date.now()-S.workout.t0)/1000),
-        exs:S.workout.exs.map(e=>({name:e.name, sets:e.sets}))
-      });
-      App.notify('Treino concluído!');
-      App.resetSeries();
-    } catch(e){ App.toast('Erro ao salvar treino.'); }
+      await DB.addSessao({id:uid(),fichaId:S.workout.fichaId,dayIdx:S.workout.dayIdx,date:new Date().toISOString(),dur:Math.floor((Date.now()-S.workout.t0)/1000),exs:S.workout.exs.map(e=>({name:e.name,sets:e.sets}))});
+      App.notify('Treino concluído!'); App.resetSeries();
+    }catch(e){App.toast('Erro ao salvar treino.');}
   }
-  $('aw').classList.remove('open');
-  S.workout = {on:false};
+  $('aw').classList.remove('open'); S.workout={on:false};
   if(S.page==='home') App.renderHome();
 },
 
-// ─── NOTIFICATIONS ──────────────────────────────────────────────
+// ─── NOTIFICATIONS ───────────────────────────────────────────────
 loadNotifications(){
-  try{ const raw=localStorage.getItem('evolv_notifications'); if(raw) S.notifications=JSON.parse(raw); }catch{S.notifications=[];}
+  try{const raw=localStorage.getItem('evolv_notifications');if(raw)S.notifications=JSON.parse(raw);}catch{S.notifications=[];}
   App.renderNotifyBadge();
 },
 
 renderNotifyBadge(){
-  const badge=$('notify-badge'); if(!badge) return;
-  const unread = S.notifications.filter(n=>!n.read).length;
-  badge.textContent = unread ? String(unread) : '';
-  badge.classList.toggle('has', unread>0);
+  const badge=$('notify-badge');if(!badge)return;
+  const unread=S.notifications.filter(n=>!n.read).length;
+  badge.textContent=unread?String(unread):'';
+  badge.classList.toggle('has',unread>0);
 },
 
+// FIX 8: Painel de notificações com banner de permissão push
 showNotifications(){
   App.closeModal();
-  const m=document.createElement('div'); m.className='mo';
-  m.innerHTML = `<div class="md">
+  const m=document.createElement('div');m.className='mo';
+
+  // Banner de permissão push
+  const perm='Notification' in window ? Notification.permission : 'unsupported';
+  const permBanner = perm !== 'granted' ? `
+    <div style="background:var(--bg-3);border:1px solid var(--line-2);border-radius:13px;padding:14px;margin-bottom:14px;display:flex;align-items:center;gap:12px">
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:600;margin-bottom:3px">Ativar notificações push</div>
+        <div style="font-size:11.5px;color:var(--t1)">Receba alertas do timer mesmo com o app minimizado</div>
+      </div>
+      ${perm==='denied'
+        ?'<span style="font-size:11px;color:var(--red);text-align:right;flex-shrink:0">Bloqueado<br>no browser</span>'
+        :`<button class="btn bp sm" onclick="App.requestNotifPermission()" style="width:auto;padding:0 14px;flex-shrink:0">Ativar</button>`
+      }
+    </div>` : '';
+
+  m.innerHTML=`<div class="md">
     <div class="mhandle"></div>
     <div class="np-head">
       <div class="np-title">Notificações</div>
       ${S.notifications.length?'<button class="btn bg sm" onclick="App.markAllNotificationsRead()" style="width:auto;padding:0 14px">Marcar todas</button>':''}
     </div>
+    ${permBanner}
     ${S.notifications.length
       ? S.notifications.map(n=>`<div class="np-item ${n.read?'read':''}">
           <div class="np-dot"></div>
@@ -1222,114 +1200,135 @@ showNotifications(){
             <div class="np-date">${new Date(n.date).toLocaleString('pt-BR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
           </div>
         </div>`).join('')
-      : `<div class="np-empty">Nenhuma notificação ainda.</div>`}
+      : `<div class="np-empty">Nenhuma notificação ainda.</div>`
+    }
     <button class="btn bg" onclick="App.closeModal()" style="margin-top:12px">Fechar</button>
   </div>`;
-  m.addEventListener('click', e=>{ if(e.target===m) App.closeModal(); });
+  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
   $('mroot').appendChild(m);
   S.notifications.forEach(n=>n.read=true);
-  localStorage.setItem('evolv_notifications', JSON.stringify(S.notifications));
+  localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
   App.renderNotifyBadge();
 },
 
 markAllNotificationsRead(){
   S.notifications.forEach(n=>n.read=true);
-  localStorage.setItem('evolv_notifications', JSON.stringify(S.notifications));
+  localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
   App.renderNotifyBadge();
   App.closeModal(); App.showNotifications();
 },
 
-notify(msg, type='info'){
-  const item={id:uid(), msg, type, date:new Date().toISOString(), read:false};
+notify(msg,type='info'){
+  const item={id:uid(),msg,type,date:new Date().toISOString(),read:false};
   S.notifications.unshift(item);
   if(S.notifications.length>30) S.notifications.length=30;
-  localStorage.setItem('evolv_notifications', JSON.stringify(S.notifications));
+  localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
   App.renderNotifyBadge();
   App.toast(msg);
 },
 
-// ─── FIREBASE SETUP ─────────────────────────────────────────────
-showFBSetup(needsCfg=true){
-  $('loading').style.display='none';
-  $('fbsetup').classList.add('open');
-},
+// ─── FIREBASE SETUP ──────────────────────────────────────────────
+showFBSetup(needsCfg=true){ $('loading').style.display='none'; $('fbsetup').classList.add('open'); },
 
 saveFBConfig(){
-  const raw = $('fb-cfg-input')?.value?.trim();
+  const raw=$('fb-cfg-input')?.value?.trim();
   try{
-    const match = raw.match(/\{[\s\S]*\}/);
+    const match=raw.match(/\{[\s\S]*\}/);
     if(!match) throw new Error();
-    const cfg = JSON.parse(match[0]);
+    const cfg=JSON.parse(match[0]);
     if(!cfg.apiKey) throw new Error('missing apiKey');
-    localStorage.setItem('evolv_fbcfg', JSON.stringify(cfg));
+    localStorage.setItem('evolv_fbcfg',JSON.stringify(cfg));
     localStorage.removeItem('evolv_offline');
     location.reload();
-  } catch(e){ App.toast('Config inválida. Verifique o JSON.'); }
+  }catch(e){App.toast('Config inválida. Verifique o JSON.');}
 },
 
 skipFBSetup(){
   localStorage.setItem('evolv_offline','1');
   $('fbsetup').classList.remove('open');
-  DB._fallback();
-  App.boot();
+  DB._fallback(); App.boot();
 },
 
-// ─── BOOT ───────────────────────────────────────────────────────
+// ─── BOOT ────────────────────────────────────────────────────────
 boot(){
-  $('loading').style.display='none';
-  $('app').style.display='flex';
+  $('loading').style.display='none'; $('app').style.display='flex';
   App.loadNotifications();
   App.renderTimerTicks();
   App.updTimer();
   App.renderHome();
   App.updateDot();
-  // init sfx and global click sound
-  try{ App.sound.init(); }catch{}
-  document.addEventListener('click', e=>{
-    try{
-      if(!App.sound.enabled) return;
-      const btn = e.target.closest('button, .ni, .icon-btn');
-      if(btn) App.sound.play('click');
-    }catch{}
-  }, {capture:false});
-  window.addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); App._ip=e; });
+  try{App.sound.init();}catch{}
+  document.addEventListener('click',e=>{
+    try{ if(!App.sound.enabled)return; const btn=e.target.closest('button,.ni,.icon-btn'); if(btn)App.sound.play('click'); }catch{}
+  },{capture:false});
+  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();App._ip=e;});
 },
 
 updateDot(){
-  const dot=$('status-dot'); if(!dot) return;
-  const on = DB._local ? false : (DB._online!==false);
-  dot.classList.toggle('off', !on);
-  dot.title = on ? 'Sincronizado' : DB._local ? 'Modo offline' : 'Sem conexão';
+  const dot=$('status-dot');if(!dot)return;
+  const on=DB._local?false:(DB._online!==false);
+  dot.classList.toggle('off',!on);
+  if(DB._local){
+    dot.title='Modo offline — clique para reconectar';
+    dot.style.cursor='pointer';
+    dot.onclick=()=>App.showReconnectModal();
+  } else {
+    dot.title=on?'Sincronizado com Firebase':'Sem conexão com o servidor';
+    dot.style.cursor='default';
+    dot.onclick=null;
+  }
 },
 
-// ─── UTILS ──────────────────────────────────────────────────────
+showReconnectModal(){
+  App.closeModal();
+  const cfg=FIREBASE_CONFIG;
+  const hasCfg=!!(cfg.apiKey||(()=>{try{return JSON.parse(localStorage.getItem('evolv_fbcfg')||'{}').apiKey;}catch{return false;}})());
+  const m=document.createElement('div');m.className='mo';
+  m.innerHTML=`<div class="md">
+    <div class="mhandle"></div>
+    <div class="mtitle">Modo offline</div>
+    <div style="background:var(--bg-3);border:1px solid var(--line-2);border-radius:13px;padding:14px;margin-bottom:18px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px">Os dados estão salvos localmente</div>
+      <div style="font-size:12px;color:var(--t1);line-height:1.5">
+        Para sincronizar com o Firebase e acessar em outros dispositivos, reconecte abaixo.
+      </div>
+    </div>
+    <button class="btn bp lg" onclick="localStorage.removeItem('evolv_offline');location.reload()" style="margin-bottom:8px">
+      ${IC.check(16)} Reconectar ao Firebase
+    </button>
+    <button class="btn bg" onclick="App.showFBSetup();App.closeModal()" style="margin-bottom:8px">Reconfigurar Firebase</button>
+    <button class="btn bg" onclick="App.closeModal()">Continuar offline</button>
+  </div>`;
+  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
+  $('mroot').appendChild(m);
+},
+
 closeModal(){ document.querySelectorAll('.mo').forEach(m=>m.remove()); },
 
 toast(msg){
   document.querySelectorAll('.toast').forEach(t=>t.remove());
-  const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
-  document.body.appendChild(t);
-  setTimeout(()=>t.remove(), 2800);
+  const t=document.createElement('div');t.className='toast';t.textContent=msg;
+  document.body.appendChild(t); setTimeout(()=>t.remove(),2800);
 },
 
 };
 
 // ─── PWA ─────────────────────────────────────────────────────────
 if('serviceWorker' in navigator){
-  const sw = `const C='evolv-v3';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(clients.claim());});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(caches.open(C).then(c=>c.match(e.request).then(r=>r||fetch(e.request).then(res=>{c.put(e.request,res.clone());return res;}).catch(()=>new Response('',{status:503})))));});`;
+  const sw=`const C='evolv-v4';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(clients.claim());});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(caches.open(C).then(c=>c.match(e.request).then(r=>r||fetch(e.request).then(res=>{c.put(e.request,res.clone());return res;}).catch(()=>new Response('',{status:503})))));});`;
   navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});
 }
 (()=>{
-  const mf = {name:'EVOLV', short_name:'EVOLV', theme_color:'#0E1015', background_color:'#0E1015', display:'standalone', orientation:'portrait', start_url:'.', icons:[{src:'icon.png', sizes:'512x512', type:'image/png', purpose:'any maskable'}]};
-  const l = document.createElement('link'); l.rel='manifest';
-  l.href = URL.createObjectURL(new Blob([JSON.stringify(mf)],{type:'application/json'}));
+  const mf={name:'EVOLV',short_name:'EVOLV',theme_color:'#0E1015',background_color:'#0E1015',display:'standalone',orientation:'portrait',start_url:'.',icons:[{src:'icon.png',sizes:'512x512',type:'image/png',purpose:'any maskable'}]};
+  const l=document.createElement('link');l.rel='manifest';
+  l.href=URL.createObjectURL(new Blob([JSON.stringify(mf)],{type:'application/json'}));
   document.head.appendChild(l);
 })();
 
-// ─── INIT ───────────────────────────────────────────────────────
-window.App = App; window.DB = DB; window.S = S;
+// ─── INIT ────────────────────────────────────────────────────────
+window.App=App; window.DB=DB; window.S=S;
 
 DB.init().then(()=>{
   DB.whenReady.then(()=>App.boot());
-  setTimeout(()=>{ if(!DB.ready){ DB.ready=true; DB._resolveReady(); } }, 6000);
+  setTimeout(()=>{ if(!DB.ready){DB.ready=true;DB._resolveReady();} },6000);
 });

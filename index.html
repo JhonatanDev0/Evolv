@@ -9,6 +9,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="EVOLV">
 <link rel="apple-touch-icon" href="icon.png">
+<!-- FIX 1: evolv-tokens.css agora está linkado -->
+<link rel="stylesheet" href="evolv-tokens.css">
 <link rel="stylesheet" href="evolv-styles.css">
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -74,10 +76,7 @@
 
   <!-- PAGES -->
   <main id="pages">
-    <!-- HOME -->
     <section class="page active" id="pg-home"></section>
-
-    <!-- FICHAS -->
     <section class="page" id="pg-fichas"></section>
 
     <!-- TIMER -->
@@ -86,7 +85,6 @@
         <button class="seg-btn on" onclick="App.showTimerTab(0)">Intervalo</button>
         <button class="seg-btn" onclick="App.showTimerTab(1)">Séries</button>
       </div>
-
       <div id="tab-interval">
         <div class="card">
           <div class="tring-wrap">
@@ -97,14 +95,11 @@
                   <stop offset="100%" stop-color="#15B863"/>
                 </linearGradient>
               </defs>
-              <!-- track -->
               <circle cx="140" cy="140" r="126" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="14"/>
-              <!-- progress -->
               <circle id="tring" cx="140" cy="140" r="126" fill="none"
                 stroke="url(#tg)" stroke-width="14" stroke-linecap="round"
                 stroke-dasharray="791.68" stroke-dashoffset="0"
                 transform="rotate(-90 140 140)"/>
-              <!-- tick marks -->
               <g id="tring-ticks"></g>
             </svg>
             <div class="ttime">
@@ -112,7 +107,6 @@
               <div class="tl" id="tstatus">Pronto</div>
             </div>
           </div>
-
           <div class="tpresets">
             <button class="tp" onclick="App.setPreset(30)">30s</button>
             <button class="tp" onclick="App.setPreset(45)">45s</button>
@@ -120,13 +114,11 @@
             <button class="tp" onclick="App.setPreset(120)">2min</button>
             <button class="tp" onclick="App.setPreset(180)">3min</button>
           </div>
-
           <div class="tcustom">
             <input type="number" id="cmin" placeholder="min" min="0" max="59" value="1" oninput="App.setCustomTime()">
             <span class="colon">:</span>
             <input type="number" id="csec" placeholder="seg" min="0" max="59" value="30" oninput="App.setCustomTime()">
           </div>
-
           <div class="tctrls">
             <button class="tcbtn rst" onclick="App.resetTimer()" aria-label="Reset">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/></svg>
@@ -140,7 +132,6 @@
           </div>
         </div>
       </div>
-
       <div id="tab-series" style="display:none">
         <div class="card">
           <div class="eyebrow" style="text-align:center">Séries realizadas</div>
@@ -163,10 +154,7 @@
       </div>
     </section>
 
-    <!-- ESTATÍSTICAS -->
     <section class="page" id="pg-stats"><div id="stats-content"></div></section>
-
-    <!-- PESAGEM -->
     <section class="page" id="pg-peso"><div id="peso-content"></div></section>
   </main>
 
