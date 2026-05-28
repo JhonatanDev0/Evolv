@@ -1468,9 +1468,11 @@ boot(){
       #notify-btn{transition:background .15s}
       #notify-btn:hover{background:var(--bg-3)}
       /* iOS PWA navbar: pin to the viewport and respect the home indicator. */
-      #nav{position:fixed!important;left:14px!important;right:14px!important;bottom:calc(10px + env(safe-area-inset-bottom,0px))!important;flex-shrink:0;margin:0!important}
+      :root{--nav-bottom:clamp(8px, env(safe-area-inset-bottom,0px), 34px)}
+      #nav{position:fixed!important;left:14px!important;right:14px!important;bottom:var(--nav-bottom)!important;flex-shrink:0;margin:0!important}
       #app{padding-bottom:0!important}
-      .page{padding-bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 34px)!important}
+      #pages{margin-bottom:calc(var(--nav-h) + var(--nav-bottom) + 12px)!important}
+      .page{padding-bottom:22px!important}
       @supports (height:100dvh){html,body,#app{height:100dvh!important}}
       @supports (-webkit-touch-callout:none){html{height:-webkit-fill-available!important}body,#app{min-height:-webkit-fill-available!important}}
     `;
@@ -1529,7 +1531,7 @@ toast(msg){
 
 // ─── PWA ─────────────────────────────────────────────────────────
 if('serviceWorker' in navigator){
-  const sw=`const C='evolv-v6';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(clients.claim());});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(caches.open(C).then(c=>c.match(e.request).then(r=>r||fetch(e.request).then(res=>{c.put(e.request,res.clone());return res;}).catch(()=>new Response('',{status:503})))));});self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.matchAll({type:'window'}).then(cs=>{for(const c of cs){if(c.url&&'focus' in c)return c.focus();}if(clients.openWindow)return clients.openWindow('./');})  );});`;
+  const sw=`const C='evolv-v8';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==C&&k.startsWith('evolv-')).map(k=>caches.delete(k)))).then(()=>clients.claim()));});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(fetch(e.request).then(res=>{const copy=res.clone();caches.open(C).then(c=>c.put(e.request,copy));return res;}).catch(()=>caches.open(C).then(c=>c.match(e.request)).then(r=>r||new Response('',{status:503}))));});self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.matchAll({type:'window'}).then(cs=>{for(const c of cs){if(c.url&&'focus' in c)return c.focus();}if(clients.openWindow)return clients.openWindow('./');})  );});`;
   navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});
 }
 (()=>{

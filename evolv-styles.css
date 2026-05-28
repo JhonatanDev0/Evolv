@@ -50,6 +50,7 @@
   --hdr-h:60px;
   --st:env(safe-area-inset-top,0px);
   --sb:env(safe-area-inset-bottom,0px);
+  --nav-bottom:clamp(8px, env(safe-area-inset-bottom, 0px), 34px);
 }
 
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -887,7 +888,7 @@ input[type=date]{color-scheme:dark}
   position: fixed;
   left: 14px;
   right: 14px;
-  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  bottom: var(--nav-bottom);
 
   /* Prevent flex sizing from changing the tap target. */
   flex-shrink: 0;
@@ -933,7 +934,11 @@ input[type=date]{color-scheme:dark}
   padding-bottom: 0;
 }
 
+#pages {
+  margin-bottom: calc(var(--nav-h) + var(--nav-bottom) + 12px);
+}
+
 /* Scrollable pages need space behind the fixed nav. */
 .page {
-  padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 34px);
+  padding-bottom: 22px;
 }
