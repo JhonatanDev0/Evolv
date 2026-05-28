@@ -50,7 +50,6 @@
   --hdr-h:60px;
   --st:env(safe-area-inset-top,0px);
   --sb:env(safe-area-inset-bottom,0px);
-  --nav-bottom:clamp(8px, env(safe-area-inset-bottom, 0px), 34px);
 }
 
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -241,7 +240,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   user-select:none;-webkit-user-select:none;
 }
 .ni:active{transform:scale(0.94)}
-.ni.active{color:var(--t0);background:var(--bg-3)}
+.ni.active{color:var(--t0);background:transparent}
 .ni.active svg{color:var(--green)}
 .ni svg{width:20px;height:20px}
 
@@ -884,29 +883,23 @@ input[type=date]{color-scheme:dark}
    ═══════════════════════════════════════════════════════════════ */
 
 #nav {
-  /* Fixed to the PWA viewport. */
   position: fixed;
-  left: 14px;
-  right: 14px;
-  bottom: var(--nav-bottom);
-
-  /* Prevent flex sizing from changing the tap target. */
+  left: 0;
+  right: 0;
+  bottom: 0;
   flex-shrink: 0;
-
-  /* Left/right fixed offsets define the floating width. */
   margin: 0;
-
-  /* Estilo visual inalterado */
-  height: var(--nav-h);
-  border-radius: 20px;
-  background: rgba(22,25,32,0.92);
+  height: calc(var(--nav-h) + var(--sb));
+  border-radius: 0;
+  background: rgba(22,25,32,0.96);
   backdrop-filter: blur(20px) saturate(160%);
   -webkit-backdrop-filter: blur(20px) saturate(160%);
-  border: 1px solid var(--line-2);
+  border: 0;
+  border-top: 1px solid var(--line-2);
   display: flex;
-  align-items: center;
-  padding: 0 6px;
-  box-shadow: 0 18px 40px -10px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,0,0,0.4);
+  align-items: flex-start;
+  padding: 7px 8px var(--sb);
+  box-shadow: 0 -12px 32px rgba(0,0,0,0.35);
   z-index: 20;
 }
 
@@ -935,10 +928,10 @@ input[type=date]{color-scheme:dark}
 }
 
 #pages {
-  margin-bottom: calc(var(--nav-h) + var(--nav-bottom) + 12px);
+  margin-bottom: calc(var(--nav-h) + var(--sb));
 }
 
 /* Scrollable pages need space behind the fixed nav. */
 .page {
-  padding-bottom: 22px;
+  padding-bottom: 18px;
 }
