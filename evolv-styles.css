@@ -709,6 +709,33 @@ input[type=date]{color-scheme:dark}
   padding:14px 18px calc(var(--sb) + 14px);
   border-top:1px solid var(--line);display:flex;gap:9px;flex-shrink:0;background:var(--bg-1);
 }
+.btn.danger-outline{
+  background:var(--red-dim);color:var(--red);border-color:transparent;
+}
+.aw-resume{
+  position:fixed;left:18px;right:18px;bottom:calc(var(--nav-h) + 12px);
+  height:58px;border-radius:17px;background:rgba(22,25,32,0.96);
+  border:1px solid var(--line-2);color:var(--t0);
+  display:none;align-items:center;gap:12px;padding:0 14px;
+  box-shadow:0 16px 36px rgba(0,0,0,0.45);
+  backdrop-filter:blur(18px) saturate(150%);
+  -webkit-backdrop-filter:blur(18px) saturate(150%);
+  z-index:45;
+}
+.aw-resume.show{display:flex}
+.aw-resume-ico{
+  width:38px;height:38px;border-radius:12px;background:var(--green-dim);
+  color:var(--green);display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--green-line);flex-shrink:0;
+}
+.aw-resume-copy{display:flex;flex-direction:column;align-items:flex-start;min-width:0}
+.aw-resume-copy strong{
+  font-size:13px;font-weight:700;line-height:1.2;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:100%;
+}
+.aw-resume-copy small{
+  font-size:11px;color:var(--t2);margin-top:2px;line-height:1.2;
+}
 
 .ex-card{
   background:var(--bg-2);border:1px solid var(--line);border-radius:16px;
@@ -749,7 +776,7 @@ input[type=date]{color-scheme:dark}
 
 /* ═══════════ MODAL ═══════════ */
 .mo{
-  position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100;
+  position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:300;
   display:flex;align-items:flex-end;backdrop-filter:blur(8px);
   animation:mfade 0.2s ease;
 }

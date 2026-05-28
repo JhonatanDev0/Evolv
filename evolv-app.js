@@ -196,7 +196,7 @@ DB.whenReady = new Promise(r=>{DB._resolveReady=r;});
 const S = {
   page:'home', timerTab:0, series:0,
   timer:{total:90,rem:90,running:false,iv:null},
-  workout:{on:false,fichaId:null,dayIdx:null,t0:null,iv:null,exs:[]},
+  workout:{on:false,minimized:false,fichaId:null,dayIdx:null,t0:null,iv:null,exs:[]},
   charts:{},
   notifications:[],
   fichaColors: ['var(--heat)','var(--cool)','var(--violet)','var(--green)','var(--amber)','var(--red)'],
@@ -536,13 +536,13 @@ toggleTimer(){ S.timer.running ? App.stopTimer() : App.startTimer(); },
 startTimer(){
   if(S.timer.rem<=0) S.timer.rem=S.timer.total;
   S.timer.running=true;
-  $('tstatus').textContent='Contando';
-  $('tplayico').outerHTML='<svg id="tplayico" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4.5" height="14" rx="1.2"/><rect x="13.5" y="5" width="4.5" height="14" rx="1.2"/></svg>';
+  App.setTimerStatus('Contando');
+  App.setTimerPlayIcon(true);
   S.timer.iv=setInterval(()=>{
     S.timer.rem--; App.updTimer();
     if(S.timer.rem<=0){
       App.stopTimer();
-      $('tstatus').textContent='Tempo!';
+      App.setTimerStatus('Tempo!');
       if(navigator.vibrate) navigator.vibrate([250,100,250,100,250]);
       App.toast('Intervalo finalizado!');
       // FIX 1: Dispara notificação push ao fim do timer
@@ -553,13 +553,26 @@ startTimer(){
 
 stopTimer(){
   S.timer.running=false; clearInterval(S.timer.iv);
-  const old=$('tplayico');
-  if(old) old.outerHTML='<svg id="tplayico" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5.5c0-1.1 1.2-1.8 2.2-1.2l11 6.5c.9.6.9 2 0 2.5l-11 6.5c-1 .6-2.2-.1-2.2-1.2z"/></svg>';
-  $('tstatus').textContent=S.timer.rem>0?'Pausado':'Pronto';
+  App.setTimerPlayIcon(false);
+  App.setTimerStatus(S.timer.rem>0?'Pausado':'Pronto');
 },
 
-resetTimer(){ App.stopTimer(); S.timer.rem=S.timer.total; App.updTimer(); $('tstatus').textContent='Pronto'; },
+resetTimer(){ App.stopTimer(); S.timer.rem=S.timer.total; App.updTimer(); App.setTimerStatus('Pronto'); },
 bumpTimer(seconds){ S.timer.rem=Math.max(1,S.timer.rem+seconds); S.timer.total=Math.max(S.timer.total,S.timer.rem); App.updTimer(); },
+
+setTimerStatus(text){
+  const a=$('tstatus'), b=$('aw-tstatus');
+  if(a) a.textContent=text;
+  if(b) b.textContent=text;
+},
+
+setTimerPlayIcon(paused){
+  const pause='<rect x="6" y="5" width="4.5" height="14" rx="1.2"/><rect x="13.5" y="5" width="4.5" height="14" rx="1.2"/>';
+  const play='<path d="M7 5.5c0-1.1 1.2-1.8 2.2-1.2l11 6.5c.9.6.9 2 0 2.5l-11 6.5c-1 .6-2.2-.1-2.2-1.2z"/>';
+  const body=paused?pause:play;
+  const main=$('tplayico');
+  if(main) main.innerHTML=body;
+},
 
 // FIX 1: Notificação push quando o timer acaba em segundo plano
 sendTimerNotification(){
@@ -612,7 +625,10 @@ addSeries(d){
   const el=$('sc-num');
   if(el){ el.textContent=S.series; el.style.color=S.series>0?'var(--green)':'var(--t0)'; el.classList.add('bump'); setTimeout(()=>el.classList.remove('bump'),160); }
 },
-resetSeries(){ S.series=0; const el=$('sc-num'); if(el){el.textContent=0;el.style.color='var(--t0)';} },
+resetSeries(){
+  S.series=0;
+  const el=$('sc-num'); if(el){el.textContent=0;el.style.color='var(--t0)';}
+},
 
 // ─── STATS ───────────────────────────────────────────────────────
 renderStats(){
@@ -1162,11 +1178,44 @@ startWorkout(fichaId,dayIdx){
   const f=DB.fichas().find(x=>x.id===fichaId);
   const d=f?.days?.[dayIdx]; if(!d)return;
   App.closeModal();
-  S.workout={on:true,fichaId,dayIdx,t0:Date.now(),iv:null,
+  App.resetSeries();
+  App.resetTimer();
+  S.workout={on:true,minimized:false,fichaId,dayIdx,t0:Date.now(),iv:null,
     exs:(d.exs||[]).map(e=>({name:e.name,ts:e.sets||3,tr:e.reps||12,sets:Array.from({length:e.sets||3},()=>({reps:e.reps||12,w:0,done:false}))}))};
   $('aw').classList.add('open'); $('aw-title').textContent=d.name;
+  App.updateWorkoutResume();
   S.workout.iv=setInterval(()=>{const el=$('aw-timer');if(el)el.textContent=ft(Math.floor((Date.now()-S.workout.t0)/1000));},1000);
   App.renderAW();
+},
+
+minimizeWorkout(){
+  if(!S.workout.on)return;
+  S.workout.minimized=true;
+  $('aw')?.classList.remove('open');
+  App.updateWorkoutResume();
+  App.nav('timer');
+},
+
+resumeWorkout(){
+  if(!S.workout.on)return;
+  S.workout.minimized=false;
+  $('aw')?.classList.add('open');
+  App.updateWorkoutResume();
+  App.renderAW();
+},
+
+updateWorkoutResume(){
+  const btn=$('aw-resume');
+  if(!btn)return;
+  btn.classList.toggle('show',!!(S.workout.on&&S.workout.minimized));
+  const title=$('aw-resume-title'), sub=$('aw-resume-sub');
+  if(title) title.textContent=$('aw-title')?.textContent||'Treino em andamento';
+  if(sub&&S.workout.on){
+    const exs=S.workout.exs||[];
+    const done=exs.reduce((a,e)=>a+e.sets.filter(s=>s.done).length,0);
+    const total=exs.reduce((a,e)=>a+e.sets.length,0);
+    sub.textContent=`${done}/${total} séries · toque para voltar`;
+  }
 },
 
 renderAW(){
@@ -1175,6 +1224,7 @@ renderAW(){
   const total=exs.reduce((a,e)=>a+e.sets.length,0);
   $('aw-sub').textContent=`${exs.length} exercícios · ${done}/${total} séries`;
   $('aw-pbar').style.width=total?`${(done/total)*100}%`:'0%';
+  App.updateWorkoutResume();
   $('aw-body').innerHTML=exs.map((ex,ei)=>{
     const allDone=ex.sets.every(s=>s.done);
     return `<div class="ex-card ${allDone?'glow':''}">
@@ -1212,13 +1262,16 @@ finishWorkout(){ App._endWO(true); },
 
 async _endWO(save){
   clearInterval(S.workout.iv);
+  App.resetTimer();
+  App.resetSeries();
   if(save){
     try{
       await DB.addSessao({id:uid(),fichaId:S.workout.fichaId,dayIdx:S.workout.dayIdx,date:new Date().toISOString(),dur:Math.floor((Date.now()-S.workout.t0)/1000),exs:S.workout.exs.map(e=>({name:e.name,sets:e.sets}))});
       App.notify('Treino concluído!','workout'); App._pushNotif('EVOLV — Treino','Treino finalizado. Excelente trabalho!',{tag:'evolv-workout'}); App.resetSeries();
     }catch(e){App.toast('Erro ao salvar treino.');}
   }
-  $('aw').classList.remove('open'); S.workout={on:false};
+  $('aw').classList.remove('open'); S.workout={on:false,minimized:false,exs:[]};
+  App.updateWorkoutResume();
   if(S.page==='home') App.renderHome();
 },
 
@@ -1533,7 +1586,7 @@ toast(msg){
 
 // ─── PWA ─────────────────────────────────────────────────────────
 if('serviceWorker' in navigator){
-  const sw=`const C='evolv-v13';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==C&&k.startsWith('evolv-')).map(k=>caches.delete(k)))).then(()=>clients.claim()));});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(fetch(e.request).then(res=>{const copy=res.clone();caches.open(C).then(c=>c.put(e.request,copy));return res;}).catch(()=>caches.open(C).then(c=>c.match(e.request)).then(r=>r||new Response('',{status:503}))));});self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.matchAll({type:'window'}).then(cs=>{for(const c of cs){if(c.url&&'focus' in c)return c.focus();}if(clients.openWindow)return clients.openWindow('./');})  );});`;
+  const sw=`const C='evolv-v15';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==C&&k.startsWith('evolv-')).map(k=>caches.delete(k)))).then(()=>clients.claim()));});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(fetch(e.request).then(res=>{const copy=res.clone();caches.open(C).then(c=>c.put(e.request,copy));return res;}).catch(()=>caches.open(C).then(c=>c.match(e.request)).then(r=>r||new Response('',{status:503}))));});self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.matchAll({type:'window'}).then(cs=>{for(const c of cs){if(c.url&&'focus' in c)return c.focus();}if(clients.openWindow)return clients.openWindow('./');})  );});`;
   navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});
 }
 (()=>{
