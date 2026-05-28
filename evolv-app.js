@@ -1467,12 +1467,12 @@ boot(){
       .np-bell-shake svg{animation:np-shake .55s ease}
       #notify-btn{transition:background .15s}
       #notify-btn:hover{background:var(--bg-3)}
-      /* iOS PWA navbar: remove absolute positioning, put nav in flex flow */
-      #nav{position:relative!important;left:auto!important;right:auto!important;bottom:auto!important;flex-shrink:0;margin:6px 14px 0!important}
-      /* Safe area padding below nav (home indicator on iPhone) */
-      #app{padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))!important}
-      /* Pages no longer need space for overlapping nav */
-      .page{padding-bottom:20px!important}
+      /* iOS PWA navbar: pin to the viewport and respect the home indicator. */
+      #nav{position:fixed!important;left:14px!important;right:14px!important;bottom:calc(10px + env(safe-area-inset-bottom,0px))!important;flex-shrink:0;margin:0!important}
+      #app{padding-bottom:0!important}
+      .page{padding-bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 34px)!important}
+      @supports (height:100dvh){html,body,#app{height:100dvh!important}}
+      @supports (-webkit-touch-callout:none){html{height:-webkit-fill-available!important}body,#app{min-height:-webkit-fill-available!important}}
     `;
     document.head.appendChild(s);
   }
@@ -1529,7 +1529,7 @@ toast(msg){
 
 // ─── PWA ─────────────────────────────────────────────────────────
 if('serviceWorker' in navigator){
-  const sw=`const C='evolv-v5';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(clients.claim());});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(caches.open(C).then(c=>c.match(e.request).then(r=>r||fetch(e.request).then(res=>{c.put(e.request,res.clone());return res;}).catch(()=>new Response('',{status:503})))));});self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.matchAll({type:'window'}).then(cs=>{for(const c of cs){if(c.url&&'focus' in c)return c.focus();}if(clients.openWindow)return clients.openWindow('./');})  );});`;
+  const sw=`const C='evolv-v6';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(clients.claim());});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(caches.open(C).then(c=>c.match(e.request).then(r=>r||fetch(e.request).then(res=>{c.put(e.request,res.clone());return res;}).catch(()=>new Response('',{status:503})))));});self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.matchAll({type:'window'}).then(cs=>{for(const c of cs){if(c.url&&'focus' in c)return c.focus();}if(clients.openWindow)return clients.openWindow('./');})  );});`;
   navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});
 }
 (()=>{

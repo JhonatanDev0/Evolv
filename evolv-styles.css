@@ -114,7 +114,14 @@ input,select,textarea{font-family:inherit;color:inherit}
 .fb-steps strong{color:var(--t0)}
 
 /* ═══════════ APP LAYOUT ═══════════ */
-#app{width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden}
+#app{
+  width:100%;
+  height:100%;
+  min-height:100dvh;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
 
 #hdr{
   height:calc(var(--hdr-h) + var(--st));padding-top:var(--st);
@@ -876,17 +883,17 @@ input[type=date]{color-scheme:dark}
    ═══════════════════════════════════════════════════════════════ */
 
 #nav {
-  /* Remove absolute/fixed positioning */
-  position: relative;
-  left: auto;
-  right: auto;
-  bottom: auto;
+  /* Fixed to the PWA viewport. */
+  position: fixed;
+  left: 14px;
+  right: 14px;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
 
-  /* Mantém como flex item no rodapé de #app */
+  /* Prevent flex sizing from changing the tap target. */
   flex-shrink: 0;
 
-  /* Margens laterais (substitui left:14px / right:14px) */
-  margin: 6px 14px 0;
+  /* Left/right fixed offsets define the floating width. */
+  margin: 0;
 
   /* Estilo visual inalterado */
   height: var(--nav-h);
@@ -902,12 +909,31 @@ input[type=date]{color-scheme:dark}
   z-index: 20;
 }
 
-/* Padding abaixo do nav: empurra o indicador home (iPhone) para fora */
-#app {
-  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+@supports (height: 100dvh) {
+  html,
+  body,
+  #app {
+    height: 100dvh;
+  }
 }
 
-/* Pages não precisam mais compensar a altura do nav flutuante */
+@supports (-webkit-touch-callout: none) {
+  html {
+    height: -webkit-fill-available;
+  }
+
+  body,
+  #app {
+    min-height: -webkit-fill-available;
+  }
+}
+
+/* The fixed nav handles the safe area itself. */
+#app {
+  padding-bottom: 0;
+}
+
+/* Scrollable pages need space behind the fixed nav. */
 .page {
-  padding-bottom: 20px;
+  padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 34px);
 }
