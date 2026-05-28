@@ -53,6 +53,7 @@ const IC = {
   bell:(s=18)=>IC._s('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',s),
   target:(s=18)=>IC._s('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/>',s),
   stopwatch:(s=16)=>IC._s('<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5"/><path d="M9.5 2.5h5M12 2.5v2"/>',s),
+  sync:(s=16)=>IC._s('<path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>',s),
   dumbbell:(s=16)=>IC._s('<path d="M6.5 6.5h11M6.5 17.5h11M5 5v14M8 4v2M8 18v2M16 4v2M16 18v2"/>',s),
   weight:(s=16)=>IC._s('<path d="M2 20h20M7 20V10a5 5 0 0 1 10 0v10M12 7v3"/>',s),
 };
@@ -111,8 +112,11 @@ const DB = {
       await DB._db.ref('.info/connected').once('value');
 
       const cred = await firebase.auth().signInAnonymously();
-      DB._uid = cred.user.uid;
-      console.info('[EVOLV] Firebase conectado. UID:', DB._uid);
+      // Sync ID: permite reusar o mesmo path em múltiplos dispositivos
+      let syncId = localStorage.getItem('evolv_sync_id');
+      if(!syncId){ syncId = cred.user.uid; localStorage.setItem('evolv_sync_id', syncId); }
+      DB._uid = syncId;
+      console.info('[EVOLV] Firebase conectado. SyncID:', DB._uid);
 
       DB._listen('fichas'); DB._listen('sessoes'); DB._listen('pesos');
 
@@ -863,7 +867,7 @@ async savePeso(){
 },
 
 async delPeso(id){
-  const confirmed=await App.showConfirmDialog({
+  await App.showConfirmDialog({
     title:'Excluir pesagem',
     message:'Esta pesagem será removida permanentemente do seu histórico.',
     confirmText:'Excluir pesagem',
@@ -999,7 +1003,6 @@ editFicha(id){ const f=DB.fichas().find(x=>x.id===id); if(f)App.showAddFicha(f);
 async showConfirmDialog(opts){
   App.closeModal();
   const {title='Confirmar', message='Tem certeza?', confirmText='Confirmar', cancelText='Cancelar', onConfirm=null, isDangerous=false}=opts;
-  
   return new Promise(resolve=>{
     const m=document.createElement('div');m.className='mo';
     m.innerHTML=`<div class="md">
@@ -1016,7 +1019,6 @@ async showConfirmDialog(opts){
     </div>`;
     m.addEventListener('click',e=>{if(e.target===m){App.closeModal();resolve(false);}});
     $('mroot').appendChild(m);
-    
     $('confirm-cancel').addEventListener('click',()=>{App.closeModal();resolve(false);});
     $('confirm-ok').addEventListener('click',async()=>{
       App.closeModal();
@@ -1027,7 +1029,7 @@ async showConfirmDialog(opts){
 },
 
 async delFicha(id){
-  const confirmed=await App.showConfirmDialog({
+  await App.showConfirmDialog({
     title:'Excluir ficha',
     message:'Esta ação não pode ser desfeita. A ficha será removida permanentemente.',
     confirmText:'Excluir ficha',
@@ -1197,7 +1199,7 @@ togSet(ei,si){
 },
 addSet(ei){ const e=S.workout.exs[ei]; e.sets.push({reps:e.tr,w:0,done:false}); App.renderAW(); },
 async cancelWorkout(){
-  const confirmed=await App.showConfirmDialog({
+  await App.showConfirmDialog({
     title:'Descartar treino',
     message:'Toda a sessão de treino será perdida. Tem certeza que deseja continuar?',
     confirmText:'Descartar treino',
@@ -1349,6 +1351,78 @@ notify(msg,type='info'){
   App.toast(msg);
 },
 
+// ─── SYNC ENTRE DISPOSITIVOS ─────────────────────────────────────
+showSyncModal(){
+  App.closeModal();
+  const sid=localStorage.getItem('evolv_sync_id')||'—';
+  const m=document.createElement('div');m.className='mo';
+  m.innerHTML=`<div class="md">
+    <div class="mhandle"></div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px">
+      <div style="width:42px;height:42px;border-radius:12px;background:var(--cool-dim);color:var(--cool);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        ${IC.sync(20)}
+      </div>
+      <div>
+        <div style="font-size:19px;font-weight:700;letter-spacing:-0.01em">Sync entre dispositivos</div>
+        <div style="font-size:12px;color:var(--t2);margin-top:1px">Acesse seus dados em qualquer aparelho</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="eyebrow" style="margin-bottom:10px">Seu código de sync</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <div style="flex:1;background:var(--bg-3);border:1px solid var(--line-2);border-radius:10px;padding:11px 14px;font-family:var(--mono);font-size:11.5px;color:var(--green);letter-spacing:0.04em;word-break:break-all">${sid}</div>
+        <button onclick="(navigator.clipboard?.writeText('${sid}')||Promise.reject()).then(()=>App.toast('Código copiado!')).catch(()=>App.toast('Selecione e copie o código manualmente'))" style="width:40px;height:40px;border-radius:11px;background:var(--green-dim);color:var(--green);border:1px solid var(--green-line);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          ${IC.clipboard(16)}
+        </button>
+      </div>
+      <div style="font-size:12px;color:var(--t2);line-height:1.55">Compartilhe este código no outro aparelho para sincronizar todos os seus dados.</div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="eyebrow" style="margin-bottom:10px">Entrar com código de outro aparelho</div>
+      <div class="ig" style="margin-bottom:10px">
+        <input type="text" id="sync-code-input" placeholder="Cole o código aqui..." autocomplete="off" spellcheck="false" style="font-family:var(--mono);font-size:13px;letter-spacing:0.04em">
+      </div>
+      <button class="btn bp" onclick="App.applySyncCode()">${IC.sync(15)} Conectar e recarregar</button>
+    </div>
+
+    <div style="background:rgba(245,192,74,0.09);border:1px solid rgba(245,192,74,0.28);border-radius:12px;padding:13px;margin-bottom:14px">
+      <div style="font-size:12px;color:var(--amber);line-height:1.6">
+        <strong>⚠ Firebase Rules</strong> — Para o sync funcionar entre dispositivos, atualize as regras do Realtime Database em <em>console.firebase.google.com</em>:<br>
+        <code style="display:block;margin-top:7px;background:var(--bg-3);border-radius:8px;padding:9px 11px;font-family:var(--mono);font-size:11px;color:var(--t0);white-space:pre-wrap;">"users": {
+  "$uid": {
+    ".read": "auth != null",
+    ".write": "auth != null"
+  }
+}</code>
+      </div>
+    </div>
+
+    <button class="btn bg" onclick="App.closeModal()">Fechar</button>
+  </div>`;
+  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
+  $('mroot').appendChild(m);
+  setTimeout(()=>$('sync-code-input')?.focus(),200);
+},
+
+applySyncCode(){
+  const code=($('sync-code-input')?.value||'').trim();
+  if(code.length<10){App.toast('Código inválido — muito curto');return;}
+  App.showConfirmDialog({
+    title:'Trocar código de sync',
+    message:'Seus dados serão substituídos pelos dados do código informado. O app vai recarregar.',
+    confirmText:'Confirmar e recarregar',
+    cancelText:'Cancelar',
+    isDangerous:false,
+    onConfirm:async()=>{
+      localStorage.setItem('evolv_sync_id',code);
+      App.toast('Aplicado! Recarregando...');
+      setTimeout(()=>location.reload(),800);
+    }
+  });
+},
+
 // ─── FIREBASE SETUP ──────────────────────────────────────────────
 showFBSetup(needsCfg=true){ $('loading').style.display='none'; $('fbsetup').classList.add('open'); },
 
@@ -1393,6 +1467,7 @@ boot(){
       .np-bell-shake svg{animation:np-shake .55s ease}
       #notify-btn{transition:background .15s}
       #notify-btn:hover{background:var(--bg-3)}
+      #nav{position:fixed!important}
     `;
     document.head.appendChild(s);
   }
@@ -1407,9 +1482,9 @@ updateDot(){
     dot.style.cursor='pointer';
     dot.onclick=()=>App.showReconnectModal();
   } else {
-    dot.title=on?'Sincronizado com Firebase':'Sem conexão com o servidor';
-    dot.style.cursor='default';
-    dot.onclick=null;
+    dot.title=on?'Firebase OK — clique para sync':'Sem conexão';
+    dot.style.cursor=on?'pointer':'default';
+    dot.onclick=on?()=>App.showSyncModal():null;
   }
 },
 
