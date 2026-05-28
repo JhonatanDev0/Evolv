@@ -857,3 +857,57 @@ input[type=date]{color-scheme:dark}
   color:var(--t2);margin:18px 0 10px;
 }
 .stitle:first-child{margin-top:4px}
+
+/* ═══════════════════════════════════════════════════════════════
+   EVOLV — navbar-fix.css
+   Cole este bloco no FINAL do evolv-styles.css
+   (sobrescreve o bloco #nav original)
+   ═══════════════════════════════════════════════════════════════
+
+   PROBLEMA:
+     position:absolute no #nav funciona no desktop mas no iOS PWA
+     o viewport é calculado de forma diferente → nav fica
+     em posição errada ou sobrepõe o indicador home.
+
+   SOLUÇÃO:
+     Tirar o nav do posicionamento absoluto e colocá-lo no
+     fluxo normal do flex layout de #app. O safe-area-inset-bottom
+     é respeitado via padding no #app.
+   ═══════════════════════════════════════════════════════════════ */
+
+#nav {
+  /* Remove absolute/fixed positioning */
+  position: relative;
+  left: auto;
+  right: auto;
+  bottom: auto;
+
+  /* Mantém como flex item no rodapé de #app */
+  flex-shrink: 0;
+
+  /* Margens laterais (substitui left:14px / right:14px) */
+  margin: 6px 14px 0;
+
+  /* Estilo visual inalterado */
+  height: var(--nav-h);
+  border-radius: 20px;
+  background: rgba(22,25,32,0.92);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid var(--line-2);
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  box-shadow: 0 18px 40px -10px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,0,0,0.4);
+  z-index: 20;
+}
+
+/* Padding abaixo do nav: empurra o indicador home (iPhone) para fora */
+#app {
+  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+}
+
+/* Pages não precisam mais compensar a altura do nav flutuante */
+.page {
+  padding-bottom: 20px;
+}

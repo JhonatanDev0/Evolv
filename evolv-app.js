@@ -1467,7 +1467,12 @@ boot(){
       .np-bell-shake svg{animation:np-shake .55s ease}
       #notify-btn{transition:background .15s}
       #notify-btn:hover{background:var(--bg-3)}
-      #nav{position:fixed!important}
+      /* iOS PWA navbar: remove absolute positioning, put nav in flex flow */
+      #nav{position:relative!important;left:auto!important;right:auto!important;bottom:auto!important;flex-shrink:0;margin:6px 14px 0!important}
+      /* Safe area padding below nav (home indicator on iPhone) */
+      #app{padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))!important}
+      /* Pages no longer need space for overlapping nav */
+      .page{padding-bottom:20px!important}
     `;
     document.head.appendChild(s);
   }
