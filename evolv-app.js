@@ -52,6 +52,20 @@ const IC = {
   info:(s=14)=>IC._s('<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>',s),
   bell:(s=18)=>IC._s('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',s),
   target:(s=18)=>IC._s('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/>',s),
+  stopwatch:(s=16)=>IC._s('<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5"/><path d="M9.5 2.5h5M12 2.5v2"/>',s),
+  dumbbell:(s=16)=>IC._s('<path d="M6.5 6.5h11M6.5 17.5h11M5 5v14M8 4v2M8 18v2M16 4v2M16 18v2"/>',s),
+  weight:(s=16)=>IC._s('<path d="M2 20h20M7 20V10a5 5 0 0 1 10 0v10M12 7v3"/>',s),
+};
+
+// ─── NOTIFICATION CONFIG ─────────────────────────────────────────
+const NOTIF_CONFIG = {
+  timer:   { ic:(s=16)=>IC.stopwatch(s),  color:'var(--cool)',   bg:'var(--cool-dim)' },
+  workout: { ic:(s=16)=>IC.trophy(s),     color:'var(--green)',  bg:'var(--green-dim)' },
+  weight:  { ic:(s=16)=>IC.scale(s),      color:'var(--violet)', bg:'var(--violet-dim)' },
+  ficha:   { ic:(s=16)=>IC.clipboard(s),  color:'var(--amber)',  bg:'rgba(245,192,74,.14)' },
+  success: { ic:(s=16)=>IC.check(s),      color:'var(--green)',  bg:'var(--green-dim)' },
+  info:    { ic:(s=16)=>IC.info(s),       color:'var(--t2)',     bg:'var(--bg-4)' },
+  error:   { ic:(s=16)=>IC._s('<circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/>',s), color:'var(--red)', bg:'var(--red-dim)' },
 };
 
 // ─── DB ──────────────────────────────────────────────────────────
@@ -545,32 +559,34 @@ bumpTimer(seconds){ S.timer.rem=Math.max(1,S.timer.rem+seconds); S.timer.total=M
 
 // FIX 1: Notificação push quando o timer acaba em segundo plano
 sendTimerNotification(){
-  // Registra no painel interno sempre
-  App.notify('Timer finalizado', 'info');
-  // Dispara push se permissão concedida
-  if('Notification' in window && Notification.permission==='granted'){
-    const opts={
-      body:'Intervalo encerrado. Próxima série!',
-      icon:'icon.png', badge:'icon.png',
-      vibrate:[250,100,250]
-    };
-    if(navigator.serviceWorker?.controller){
-      navigator.serviceWorker.ready
-        .then(r=>r.showNotification('EVOLV — Timer',opts))
-        .catch(()=>new Notification('EVOLV — Timer',opts));
-    } else {
-      new Notification('EVOLV — Timer',opts);
-    }
-  }
+  App.notify('Intervalo finalizado!', 'timer');
+  App._pushNotif('EVOLV — Timer','Intervalo encerrado. Próxima série!',{
+    tag:'evolv-timer', vibrate:[200,80,200,80,400],
+  });
 },
 
-// FIX 2: Solicita permissão para notificações push
+// Centraliza envio de push — usa SW se disponível (funciona em 2º plano)
+_pushNotif(title, body, extra={}){
+  if(!('Notification' in window) || Notification.permission!=='granted') return;
+  const opts={body,icon:'icon.png',badge:'icon.png',vibrate:[200,100,200],requireInteraction:false,...extra};
+  if(navigator.serviceWorker?.controller){
+    navigator.serviceWorker.ready
+      .then(reg=>reg.showNotification(title,opts))
+      .catch(()=>{try{new Notification(title,opts);}catch{}});
+  } else { try{new Notification(title,opts);}catch{} }
+},
+
 async requestNotifPermission(){
   if(!('Notification' in window)){ App.toast('Browser não suporta notificações'); return; }
-  if(Notification.permission==='denied'){ App.toast('Permissão bloqueada — habilite no browser'); return; }
+  if(Notification.permission==='denied'){ App.toast('Permissão bloqueada — habilite nas configurações do browser'); return; }
   const r=await Notification.requestPermission();
-  if(r==='granted'){ App.notify('Notificações push ativadas!'); }
-  else { App.toast('Permissão negada no browser'); }
+  if(r==='granted'){
+    App.notify('Notificações push ativadas!','success');
+    // Envia uma notificação de teste
+    App._pushNotif('EVOLV','Notificações ativadas com sucesso!',{tag:'evolv-test'});
+  } else {
+    App.toast('Permissão negada');
+  }
 },
 
 updTimer(){
@@ -967,7 +983,7 @@ async saveFicha(editId){
   try{
     if(editId) await DB.updFicha(editId,{name,days,updAt:Date.now()});
     else       await DB.addFicha({id:uid(),name,days,at:Date.now()});
-    App.closeModal(); App.renderFichas(); App.notify(editId?'Ficha atualizada!':'Ficha criada!');
+    App.closeModal(); App.renderFichas(); App.notify(editId?'Ficha atualizada!':'Ficha criada!', editId?'success':'ficha');
   }catch(e){App.toast('Erro ao salvar.');}
 },
 
@@ -1061,7 +1077,7 @@ async importFichasFromJson(raw){
       await DB.addFicha(item); imported++;
     }
     App.renderFichas();
-    App.notify(`${imported} ${imported===1?'ficha importada':'fichas importadas'}.`);
+    App.notify(`${imported} ${imported===1?'ficha importada':'fichas importadas'}.`,'ficha');
   }catch(e){App.toast('JSON inválido. Verifique e tente novamente.');}
 },
 
@@ -1146,7 +1162,7 @@ async _endWO(save){
   if(save){
     try{
       await DB.addSessao({id:uid(),fichaId:S.workout.fichaId,dayIdx:S.workout.dayIdx,date:new Date().toISOString(),dur:Math.floor((Date.now()-S.workout.t0)/1000),exs:S.workout.exs.map(e=>({name:e.name,sets:e.sets}))});
-      App.notify('Treino concluído!'); App.resetSeries();
+      App.notify('Treino concluído!','workout'); App._pushNotif('EVOLV — Treino','Treino finalizado. Excelente trabalho!',{tag:'evolv-workout'}); App.resetSeries();
     }catch(e){App.toast('Erro ao salvar treino.');}
   }
   $('aw').classList.remove('open'); S.workout={on:false};
@@ -1162,66 +1178,121 @@ loadNotifications(){
 renderNotifyBadge(){
   const badge=$('notify-badge');if(!badge)return;
   const unread=S.notifications.filter(n=>!n.read).length;
-  badge.textContent=unread?String(unread):'';
+  badge.textContent=unread>9?'9+':unread||'';
   badge.classList.toggle('has',unread>0);
+  // Animação no sino quando nova notificação chega
+  const btn=$('notify-btn');
+  if(btn&&unread>0){btn.classList.add('np-bell-shake');setTimeout(()=>btn.classList.remove('np-bell-shake'),600);}
 },
 
-// FIX 8: Painel de notificações com banner de permissão push
 showNotifications(){
   App.closeModal();
+  // Marca como lidas ao abrir
+  S.notifications.forEach(n=>n.read=true);
+  localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
+  App.renderNotifyBadge();
+
   const m=document.createElement('div');m.className='mo';
-
-  // Banner de permissão push
-  const perm='Notification' in window ? Notification.permission : 'unsupported';
-  const permBanner = perm !== 'granted' ? `
-    <div style="background:var(--bg-3);border:1px solid var(--line-2);border-radius:13px;padding:14px;margin-bottom:14px;display:flex;align-items:center;gap:12px">
-      <div style="flex:1">
-        <div style="font-size:13px;font-weight:600;margin-bottom:3px">Ativar notificações push</div>
-        <div style="font-size:11.5px;color:var(--t1)">Receba alertas do timer mesmo com o app minimizado</div>
+  m.innerHTML=`<div class="md" style="padding-left:0;padding-right:0">
+    <div class="mhandle" style="margin-left:auto;margin-right:auto"></div>
+    <!-- Cabeçalho -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:0 20px 14px;border-bottom:1px solid var(--line)">
+      <div>
+        <div style="font-size:20px;font-weight:700;letter-spacing:-0.02em">Notificações</div>
+        <div style="font-size:11px;color:var(--t2);margin-top:2px">${S.notifications.length} registros</div>
       </div>
-      ${perm==='denied'
-        ?'<span style="font-size:11px;color:var(--red);text-align:right;flex-shrink:0">Bloqueado<br>no browser</span>'
-        :`<button class="btn bp sm" onclick="App.requestNotifPermission()" style="width:auto;padding:0 14px;flex-shrink:0">Ativar</button>`
-      }
-    </div>` : '';
-
-  m.innerHTML=`<div class="md">
-    <div class="mhandle"></div>
-    <div class="np-head">
-      <div class="np-title">Notificações</div>
-      ${S.notifications.length?'<button class="btn bg sm" onclick="App.markAllNotificationsRead()" style="width:auto;padding:0 14px">Marcar todas</button>':''}
+      ${S.notifications.length?`
+        <button onclick="App.clearAllNotifications()" style="display:flex;align-items:center;gap:6px;height:34px;padding:0 14px;border-radius:10px;background:var(--red-dim);color:var(--red);border:none;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit">
+          ${IC.trash(13)} Limpar tudo
+        </button>`:''}
     </div>
-    ${permBanner}
-    ${S.notifications.length
-      ? S.notifications.map(n=>`<div class="np-item ${n.read?'read':''}">
-          <div class="np-dot"></div>
-          <div>
-            <div class="np-message">${n.msg}</div>
-            <div class="np-date">${new Date(n.date).toLocaleString('pt-BR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
-          </div>
-        </div>`).join('')
-      : `<div class="np-empty">Nenhuma notificação ainda.</div>`
-    }
-    <button class="btn bg" onclick="App.closeModal()" style="margin-top:12px">Fechar</button>
+    <!-- Banner de permissão push -->
+    <div id="np-perm-banner" style="padding:0 20px"></div>
+    <!-- Lista -->
+    <div id="np-list" style="padding:0 20px;max-height:55vh;overflow-y:auto"></div>
+    <div style="padding:14px 20px 0">
+      <button class="btn bg" onclick="App.closeModal()">Fechar</button>
+    </div>
   </div>`;
   m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
   $('mroot').appendChild(m);
-  S.notifications.forEach(n=>n.read=true);
-  localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
-  App.renderNotifyBadge();
+  App._renderNotifItems();
+  App._renderPermBanner();
 },
 
-markAllNotificationsRead(){
-  S.notifications.forEach(n=>n.read=true);
+_renderPermBanner(){
+  const el=document.getElementById('np-perm-banner'); if(!el)return;
+  const perm='Notification' in window?Notification.permission:'unsupported';
+  if(perm==='granted'){el.innerHTML='';return;}
+  el.innerHTML=`
+    <div style="background:var(--bg-3);border:1px solid var(--line-2);border-radius:13px;padding:14px;margin:14px 0;display:flex;align-items:center;gap:12px">
+      <div style="width:36px;height:36px;border-radius:10px;background:var(--cool-dim);color:var(--cool);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        ${IC.bell(18)}
+      </div>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:600;margin-bottom:2px">Ativar notificações push</div>
+        <div style="font-size:11.5px;color:var(--t1)">Alertas do timer no celular mesmo minimizado</div>
+      </div>
+      ${perm==='denied'
+        ?`<div style="font-size:11px;color:var(--red);text-align:center;flex-shrink:0;line-height:1.3">Bloqueado<br>no browser</div>`
+        :`<button onclick="App.requestNotifPermission()" style="height:36px;padding:0 14px;border-radius:10px;background:linear-gradient(135deg,var(--green),var(--green-2));color:#06140C;border:none;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit;flex-shrink:0">Ativar</button>`
+      }
+    </div>`;
+},
+
+_renderNotifItems(){
+  const el=document.getElementById('np-list'); if(!el)return;
+  if(!S.notifications.length){
+    el.innerHTML=`<div style="text-align:center;padding:40px 0;color:var(--t2)">
+      <div style="width:56px;height:56px;border-radius:14px;background:var(--bg-3);border:1px solid var(--line);display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px;color:var(--t3)">${IC.bell(24)}</div>
+      <div style="font-size:14px;font-weight:600;color:var(--t1);margin-bottom:4px">Sem notificações</div>
+      <div style="font-size:12px">As notificações aparecerão aqui</div>
+    </div>`;
+    return;
+  }
+  el.innerHTML=S.notifications.map(n=>{
+    const cfg=NOTIF_CONFIG[n.type]||NOTIF_CONFIG.info;
+    const timeStr=relTime(n.date);
+    return `<div style="display:flex;align-items:flex-start;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)">
+      <div style="width:38px;height:38px;border-radius:11px;background:${cfg.bg};color:${cfg.color};display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid color-mix(in oklab,${cfg.color} 20%,transparent)">
+        ${cfg.ic(16)}
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13.5px;font-weight:500;color:var(--t0);line-height:1.35">${n.msg}</div>
+        <div style="font-size:11px;color:var(--t2);margin-top:4px;font-family:var(--mono)">${timeStr}</div>
+      </div>
+      <button onclick="App.deleteNotification('${n.id}')" title="Apagar"
+        style="width:28px;height:28px;border-radius:8px;background:transparent;color:var(--t3);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .12s"
+        onmouseenter="this.style.background='var(--red-dim)';this.style.color='var(--red)'"
+        onmouseleave="this.style.background='transparent';this.style.color='var(--t3)'">
+        ${IC.close(13)}
+      </button>
+    </div>`;
+  }).join('');
+},
+
+deleteNotification(id){
+  S.notifications=S.notifications.filter(n=>n.id!==id);
   localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
   App.renderNotifyBadge();
-  App.closeModal(); App.showNotifications();
+  App._renderNotifItems();
+  // Atualiza contador no cabeçalho
+  const sub=document.querySelector('#mroot .mo .md div[style*="registros"]');
+  if(sub) sub.textContent=`${S.notifications.length} registros`;
+},
+
+clearAllNotifications(){
+  S.notifications=[];
+  localStorage.removeItem('evolv_notifications');
+  App.renderNotifyBadge();
+  App.closeModal();
+  App.showNotifications();
 },
 
 notify(msg,type='info'){
   const item={id:uid(),msg,type,date:new Date().toISOString(),read:false};
   S.notifications.unshift(item);
-  if(S.notifications.length>30) S.notifications.length=30;
+  if(S.notifications.length>50) S.notifications.length=50;
   localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
   App.renderNotifyBadge();
   App.toast(msg);
@@ -1262,6 +1333,18 @@ boot(){
     try{ if(!App.sound.enabled)return; const btn=e.target.closest('button,.ni,.icon-btn'); if(btn)App.sound.play('click'); }catch{}
   },{capture:false});
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();App._ip=e;});
+  // Injeta CSS do sino animado
+  if(!document.getElementById('evolv-notif-styles')){
+    const s=document.createElement('style');
+    s.id='evolv-notif-styles';
+    s.textContent=`
+      @keyframes np-shake{0%,100%{transform:rotate(0)}15%{transform:rotate(18deg)}30%{transform:rotate(-14deg)}45%{transform:rotate(10deg)}60%{transform:rotate(-6deg)}75%{transform:rotate(3deg)}}
+      .np-bell-shake svg{animation:np-shake .55s ease}
+      #notify-btn{transition:background .15s}
+      #notify-btn:hover{background:var(--bg-3)}
+    `;
+    document.head.appendChild(s);
+  }
 },
 
 updateDot(){
@@ -1315,7 +1398,7 @@ toast(msg){
 
 // ─── PWA ─────────────────────────────────────────────────────────
 if('serviceWorker' in navigator){
-  const sw=`const C='evolv-v4';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(clients.claim());});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(caches.open(C).then(c=>c.match(e.request).then(r=>r||fetch(e.request).then(res=>{c.put(e.request,res.clone());return res;}).catch(()=>new Response('',{status:503})))));});`;
+  const sw=`const C='evolv-v5';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(clients.claim());});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(caches.open(C).then(c=>c.match(e.request).then(r=>r||fetch(e.request).then(res=>{c.put(e.request,res.clone());return res;}).catch(()=>new Response('',{status:503})))));});self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.matchAll({type:'window'}).then(cs=>{for(const c of cs){if(c.url&&'focus' in c)return c.focus();}if(clients.openWindow)return clients.openWindow('./');})  );});`;
   navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});
 }
 (()=>{
