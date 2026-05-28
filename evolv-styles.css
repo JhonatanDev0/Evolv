@@ -751,6 +751,30 @@ input[type=date]{color-scheme:dark}
 }
 .mtitle{font-size:20px;font-weight:700;letter-spacing:-0.02em;margin-bottom:18px}
 
+/* ═══════════ CONFIRM DIALOG ═══════════ */
+.confirm-content{
+  display:flex;flex-direction:column;align-items:center;text-align:center;
+  padding:20px 0;
+}
+.confirm-icon{
+  width:56px;height:56px;border-radius:14px;
+  background:var(--red-dim);color:var(--red);
+  display:flex;align-items:center;justify-content:center;
+  margin-bottom:16px;font-size:28px;
+}
+.confirm-title{
+  font-size:18px;font-weight:700;letter-spacing:-0.01em;
+  margin-bottom:8px;color:var(--t0);
+}
+.confirm-message{
+  font-size:13px;color:var(--t1);line-height:1.5;
+  margin-bottom:20px;max-width:280px;
+}
+.confirm-actions{
+  display:flex;gap:10px;width:100%;
+}
+.confirm-actions button{flex:1}
+
 /* ═══════════ NOTIFICATIONS PANEL ═══════════ */
 .np-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .np-title{font-size:18px;font-weight:700;letter-spacing:-0.02em}

@@ -863,8 +863,14 @@ async savePeso(){
 },
 
 async delPeso(id){
-  if(!confirm('Excluir esta pesagem?')) return;
-  await DB.delPeso(id); App.renderPeso();
+  const confirmed=await App.showConfirmDialog({
+    title:'Excluir pesagem',
+    message:'Esta pesagem será removida permanentemente do seu histórico.',
+    confirmText:'Excluir pesagem',
+    cancelText:'Cancelar',
+    isDangerous:true,
+    onConfirm:async()=>{try{await DB.delPeso(id);App.renderPeso();App.toast('Pesagem excluída');}catch(e){App.toast('Erro ao excluir.');}}
+  });
 },
 
 // FIX 6: Modal para editar meta de peso
@@ -989,10 +995,46 @@ async saveFicha(editId){
 
 editFicha(id){ const f=DB.fichas().find(x=>x.id===id); if(f)App.showAddFicha(f); },
 
+// ─── CONFIRM DIALOG ──────────────────────────────────────────────
+async showConfirmDialog(opts){
+  App.closeModal();
+  const {title='Confirmar', message='Tem certeza?', confirmText='Confirmar', cancelText='Cancelar', onConfirm=null, isDangerous=false}=opts;
+  
+  return new Promise(resolve=>{
+    const m=document.createElement('div');m.className='mo';
+    m.innerHTML=`<div class="md">
+      <div class="mhandle"></div>
+      <div class="confirm-content">
+        <div class="confirm-icon">${isDangerous?IC.trash(28):IC.info(28)}</div>
+        <div class="confirm-title">${title}</div>
+        <div class="confirm-message">${message}</div>
+      </div>
+      <div class="confirm-actions">
+        <button class="btn bg" id="confirm-cancel">${cancelText}</button>
+        <button class="btn ${isDangerous?'bd':'bp'}" id="confirm-ok">${confirmText}</button>
+      </div>
+    </div>`;
+    m.addEventListener('click',e=>{if(e.target===m){App.closeModal();resolve(false);}});
+    $('mroot').appendChild(m);
+    
+    $('confirm-cancel').addEventListener('click',()=>{App.closeModal();resolve(false);});
+    $('confirm-ok').addEventListener('click',async()=>{
+      App.closeModal();
+      if(onConfirm) await onConfirm();
+      resolve(true);
+    });
+  });
+},
+
 async delFicha(id){
-  if(!confirm('Excluir esta ficha?')) return;
-  try{await DB.delFicha(id);App.toast('Ficha excluída');}
-  catch(e){App.toast('Erro ao excluir.');}
+  const confirmed=await App.showConfirmDialog({
+    title:'Excluir ficha',
+    message:'Esta ação não pode ser desfeita. A ficha será removida permanentemente.',
+    confirmText:'Excluir ficha',
+    cancelText:'Cancelar',
+    isDangerous:true,
+    onConfirm:async()=>{try{await DB.delFicha(id);App.renderFichas();App.toast('Ficha excluída');}catch(e){App.toast('Erro ao excluir.');}}
+  });
 },
 
 // ─── FIX 4: EXPORT / IMPORT ──────────────────────────────────────
@@ -1154,7 +1196,16 @@ togSet(ei,si){
   if(s.done){ App.addSeries(1); App.resetTimer(); App.startTimer(); App.toast('Timer iniciado!'); }
 },
 addSet(ei){ const e=S.workout.exs[ei]; e.sets.push({reps:e.tr,w:0,done:false}); App.renderAW(); },
-cancelWorkout(){ if(!confirm('Descartar treino?'))return; App._endWO(false); },
+async cancelWorkout(){
+  const confirmed=await App.showConfirmDialog({
+    title:'Descartar treino',
+    message:'Toda a sessão de treino será perdida. Tem certeza que deseja continuar?',
+    confirmText:'Descartar treino',
+    cancelText:'Continuar',
+    isDangerous:true,
+    onConfirm:async()=>{App._endWO(false);}
+  });
+},
 finishWorkout(){ App._endWO(true); },
 
 async _endWO(save){
