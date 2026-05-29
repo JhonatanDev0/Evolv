@@ -1,11 +1,19 @@
 // ═══════════════════════════════════════════════════════════════
 // EVOLV — app logic
-// Correções v2 aplicadas:
+// Correções v2:
 //  [SEC-1] Escape de HTML em todos os templates com dados do usuário (XSS)
 //  [SEC-2] Sanitização de fichas importadas via JSON
 //  [TIMER] Timer resiliente a background via timestamp (iOS/PWA safe)
 //  [PERF]  renderAW() com atualização cirúrgica de checkboxes/progresso
-//          sem reconstruir o DOM inteiro a cada toque
+//
+// Melhorias v3:
+//  [CACHE-WO] Cache de treino em andamento — persiste estado completo no
+//             localStorage a cada interação; restaura automaticamente ao
+//             reabrir o app, com banner de recuperação e opção de descartar.
+//  [UPDATE]   Sistema de atualização via Service Worker — detecta novo SW
+//             disponível e exibe banner não-intrusivo com opções
+//             "Atualizar agora" e "Depois". Atualizar agora faz skipWaiting
+//             + reload; "Depois" descarta o banner até o próximo ciclo.
 // ═══════════════════════════════════════════════════════════════
 
 const FIREBASE_CONFIG = {
@@ -30,6 +38,64 @@ const esc = s => {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+};
+
+// ─── [CACHE-WO] WORKOUT CACHE ────────────────────────────────────
+// Persiste o estado completo do treino em andamento no localStorage.
+// Chamado a cada interação (togSet, updSet, addSet, startWorkout).
+// Na inicialização, verifica se há cache válido e oferece restauração.
+//
+// Estrutura salva:
+// {
+//   fichaId, dayIdx, t0,          ← identificação e horário de início
+//   exs: [...],                   ← estado completo dos exercícios/sets
+//   savedAt: <timestamp>          ← para exibir "há X minutos"
+// }
+const WorkoutCache = {
+  KEY: 'evolv_workout_cache',
+  // Máximo de horas que um cache é considerado válido
+  MAX_AGE_H: 12,
+
+  save(){
+    if(!S.workout.on) return;
+    try{
+      const snapshot = {
+        fichaId:  S.workout.fichaId,
+        dayIdx:   S.workout.dayIdx,
+        t0:       S.workout.t0,
+        exs:      JSON.parse(JSON.stringify(S.workout.exs)), // deep clone
+        savedAt:  Date.now(),
+      };
+      localStorage.setItem(WorkoutCache.KEY, JSON.stringify(snapshot));
+    }catch(e){ console.warn('[WorkoutCache] Falha ao salvar:', e); }
+  },
+
+  load(){
+    try{
+      const raw = localStorage.getItem(WorkoutCache.KEY);
+      if(!raw) return null;
+      const data = JSON.parse(raw);
+      // Valida estrutura mínima
+      if(!data.fichaId || !Array.isArray(data.exs) || !data.t0) return null;
+      // Descarta cache muito antigo
+      const ageH = (Date.now() - data.savedAt) / 3600000;
+      if(ageH > WorkoutCache.MAX_AGE_H){ WorkoutCache.clear(); return null; }
+      return data;
+    }catch(e){ return null; }
+  },
+
+  clear(){
+    localStorage.removeItem(WorkoutCache.KEY);
+  },
+
+  // Formata tempo decorrido desde o cache para exibir no banner
+  ageLabel(savedAt){
+    const min = Math.round((Date.now() - savedAt) / 60000);
+    if(min < 1)  return 'agora mesmo';
+    if(min < 60) return `há ${min} min`;
+    const h = Math.floor(min / 60);
+    return `há ${h}h${min%60 > 0 ? ` ${min%60}min` : ''}`;
+  },
 };
 
 // ─── ICON HELPER ─────────────────────────────────────────────────
@@ -1259,7 +1325,14 @@ startWorkout(fichaId,dayIdx){
     exs:(d.exs||[]).map(e=>({name:e.name,ts:e.sets||3,tr:e.reps||12,sets:Array.from({length:e.sets||3},()=>({reps:e.reps||12,w:0,done:false}))}))};
   $('aw').classList.add('open'); $('aw-title').textContent=d.name;
   App.updateWorkoutResume();
-  S.workout.iv=setInterval(()=>{const el=$('aw-timer');if(el)el.textContent=ft(Math.floor((Date.now()-S.workout.t0)/1000));},1000);
+  // [CACHE-WO] Salva estado inicial imediatamente
+  WorkoutCache.save();
+  S.workout.iv=setInterval(()=>{
+    const el=$('aw-timer');
+    if(el) el.textContent=ft(Math.floor((Date.now()-S.workout.t0)/1000));
+    // [CACHE-WO] Persiste a cada 10s para não spammar localStorage
+    if(Math.floor((Date.now()-S.workout.t0)/1000) % 10 === 0) WorkoutCache.save();
+  },1000);
   App.renderAW();
 },
 
@@ -1354,10 +1427,16 @@ renderAW(forceRebuild=false){
   }).join('');
 },
 
-updSet(ei,si,f,v){ S.workout.exs[ei].sets[si][f]=+v; },
+updSet(ei,si,f,v){
+  S.workout.exs[ei].sets[si][f]=+v;
+  // [CACHE-WO] Persiste imediatamente ao alterar carga/reps
+  WorkoutCache.save();
+},
 
 togSet(ei,si){
   const s=S.workout.exs[ei].sets[si]; s.done=!s.done;
+  // [CACHE-WO] Persiste imediatamente ao marcar/desmarcar série
+  WorkoutCache.save();
   // Atualização cirúrgica — não reconstrói o DOM
   App.renderAW(false);
   if(s.done){ App.addSeries(1); App.resetTimer(); App.startTimer(); App.toast('Timer iniciado!'); }
@@ -1365,6 +1444,8 @@ togSet(ei,si){
 
 addSet(ei){
   const e=S.workout.exs[ei]; e.sets.push({reps:e.tr,w:0,done:false});
+  // [CACHE-WO] Persiste ao adicionar série
+  WorkoutCache.save();
   // Rebuild completo pois estrutura mudou
   App.renderAW(true);
 },
@@ -1385,6 +1466,8 @@ async _endWO(save){
   clearInterval(S.workout.iv);
   App.resetTimer();
   App.resetSeries();
+  // [CACHE-WO] Limpa o cache sempre que o treino termina (salvo ou descartado)
+  WorkoutCache.clear();
   if(save){
     try{
       await DB.addSessao({id:uid(),fichaId:S.workout.fichaId,dayIdx:S.workout.dayIdx,date:new Date().toISOString(),dur:Math.floor((Date.now()-S.workout.t0)/1000),exs:S.workout.exs.map(e=>({name:e.name,sets:e.sets}))});
@@ -1612,6 +1695,251 @@ skipFBSetup(){
   DB._fallback(); App.boot();
 },
 
+// ─── [CACHE-WO] RECUPERAÇÃO DE TREINO ────────────────────────────
+// Verifica se há treino em cache ao inicializar o app.
+// Exibe um banner fixo (não-modal) para não bloquear a UI.
+// O usuário pode retomar o treino ou descartar o cache.
+checkWorkoutCache(){
+  const cache = WorkoutCache.load();
+  if(!cache) return;
+
+  // Valida que a ficha ainda existe no banco
+  const ficha = DB.fichas().find(f => f.id === cache.fichaId);
+  if(!ficha){ WorkoutCache.clear(); return; }
+
+  const day = ficha.days?.[cache.dayIdx];
+  const ageLabel = WorkoutCache.ageLabel(cache.savedAt);
+  const doneCount = cache.exs.reduce((a,e)=>a+e.sets.filter(s=>s.done).length,0);
+  const totalCount = cache.exs.reduce((a,e)=>a+e.sets.length,0);
+
+  // Cria banner de recuperação
+  const banner = document.createElement('div');
+  banner.id = 'wo-recovery-banner';
+  banner.innerHTML = `
+    <div style="
+      position:fixed;bottom:calc(var(--nav-h) + 12px);left:14px;right:14px;
+      background:var(--bg-2);border:1px solid var(--green-line);border-radius:18px;
+      padding:14px 16px;z-index:90;
+      box-shadow:0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(31,224,122,0.12);
+      animation:mslide .3s cubic-bezier(0.32,0.72,0,1);
+    ">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="
+          width:42px;height:42px;border-radius:13px;flex-shrink:0;
+          background:var(--green-dim);color:var(--green);
+          border:1px solid var(--green-line);
+          display:flex;align-items:center;justify-content:center;
+        ">${IC.activity(20)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13.5px;font-weight:700;color:var(--t0);line-height:1.2">
+            Treino interrompido
+          </div>
+          <div style="font-size:12px;color:var(--t2);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${esc(day?.name || ficha.name)} · ${doneCount}/${totalCount} séries · ${ageLabel}
+          </div>
+        </div>
+        <button id="wo-recovery-dismiss" style="
+          width:28px;height:28px;border-radius:8px;flex-shrink:0;
+          background:var(--bg-3);color:var(--t2);border:1px solid var(--line);
+          display:flex;align-items:center;justify-content:center;cursor:pointer;
+        ">${IC.close(13)}</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button id="wo-recovery-discard" class="btn bg sm" style="flex:1">
+          Descartar
+        </button>
+        <button id="wo-recovery-resume" class="btn bp sm" style="flex:2">
+          ${IC.play(13)} Retomar treino
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(banner);
+
+  // Retomar treino
+  document.getElementById('wo-recovery-resume').addEventListener('click', () => {
+    banner.remove();
+    App._restoreWorkoutFromCache(cache, ficha, day);
+  });
+
+  // Descartar cache
+  document.getElementById('wo-recovery-discard').addEventListener('click', () => {
+    WorkoutCache.clear();
+    banner.remove();
+    App.toast('Treino descartado.');
+  });
+
+  // Fechar banner (mantém cache para próxima vez)
+  document.getElementById('wo-recovery-dismiss').addEventListener('click', () => {
+    banner.remove();
+  });
+},
+
+// Restaura o estado completo do treino a partir do cache
+_restoreWorkoutFromCache(cache, ficha, day){
+  App.resetSeries();
+  App.resetTimer();
+
+  S.workout = {
+    on: true,
+    minimized: false,
+    fichaId: cache.fichaId,
+    dayIdx:  cache.dayIdx,
+    t0:      cache.t0,        // mantém o t0 original para duração correta
+    iv:      null,
+    exs:     cache.exs,       // restaura sets/cargas/reps/done exatamente
+  };
+
+  const dayName = day?.name || ficha.name;
+  $('aw').classList.add('open');
+  $('aw-title').textContent = dayName;
+  App.updateWorkoutResume();
+
+  // Reinicia o cronômetro visual a partir do t0 original
+  S.workout.iv = setInterval(() => {
+    const el = $('aw-timer');
+    if(el) el.textContent = ft(Math.floor((Date.now() - S.workout.t0) / 1000));
+    if(Math.floor((Date.now() - S.workout.t0) / 1000) % 10 === 0) WorkoutCache.save();
+  }, 1000);
+
+  // Recalcula e restaura o contador de séries feitas
+  const doneCount = cache.exs.reduce((a,e)=>a+e.sets.filter(s=>s.done).length,0);
+  S.series = doneCount;
+  const scNum = $('sc-num');
+  if(scNum){ scNum.textContent = doneCount; scNum.style.color = doneCount > 0 ? 'var(--green)' : 'var(--t0)'; }
+
+  App.renderAW(true);
+  App.toast('Treino restaurado!');
+},
+
+// ─── [UPDATE] SISTEMA DE ATUALIZAÇÃO ────────────────────────────
+// Detecta quando o Service Worker registrou uma nova versão (estado
+// 'installing' → 'installed'). Exibe um banner não-intrusivo com
+// "Atualizar agora" (skipWaiting + reload) e "Depois" (descarta).
+//
+// O SW precisa responder à mensagem {type:'SKIP_WAITING'} para que
+// o skipWaiting funcione a partir da página. O SW atualizado neste
+// arquivo já inclui esse listener.
+_swReg: null,  // guarda a registration para uso posterior
+
+initUpdateSystem(){
+  if(!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.ready.then(reg => {
+    App._swReg = reg;
+
+    // Verifica se já há um worker instalado aguardando (SW atualizado
+    // enquanto o app estava em background)
+    if(reg.waiting){
+      App._showUpdateBanner(reg.waiting);
+      return;
+    }
+
+    // Escuta novos workers que entrem no estado 'installed'
+    reg.addEventListener('updatefound', () => {
+      const newWorker = reg.installing;
+      if(!newWorker) return;
+      newWorker.addEventListener('statechange', () => {
+        if(newWorker.state === 'installed' && navigator.serviceWorker.controller){
+          // Novo worker instalado e pronto, mas ainda não ativo
+          App._showUpdateBanner(newWorker);
+        }
+      });
+    });
+  }).catch(() => {});
+
+  // Quando o SW ativo muda (após skipWaiting), recarrega automaticamente
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if(refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+},
+
+_showUpdateBanner(worker){
+  // Evita duplicar o banner
+  if(document.getElementById('update-banner')) return;
+
+  const banner = document.createElement('div');
+  banner.id = 'update-banner';
+  banner.innerHTML = `
+    <div style="
+      position:fixed;top:calc(var(--hdr-h) + var(--st) + 10px);
+      left:14px;right:14px;
+      background:var(--bg-2);
+      border:1px solid var(--cool-dim);
+      border-top:2px solid var(--cool);
+      border-radius:16px;
+      padding:14px 16px;
+      z-index:95;
+      box-shadow:0 8px 32px rgba(0,0,0,0.5);
+      animation:fadeUp .3s cubic-bezier(0.22,0.95,0.32,1);
+    ">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="
+          width:38px;height:38px;border-radius:11px;flex-shrink:0;
+          background:var(--cool-dim);color:var(--cool);
+          display:flex;align-items:center;justify-content:center;
+        ">${IC.sync(18)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13.5px;font-weight:700;color:var(--t0)">
+            Nova versão disponível
+          </div>
+          <div style="font-size:12px;color:var(--t2);margin-top:2px">
+            Atualize para obter melhorias e correções
+          </div>
+        </div>
+        <button id="update-dismiss" style="
+          width:28px;height:28px;border-radius:8px;flex-shrink:0;
+          background:var(--bg-3);color:var(--t2);border:1px solid var(--line);
+          display:flex;align-items:center;justify-content:center;cursor:pointer;
+        ">${IC.close(13)}</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button id="update-later" class="btn bg sm" style="flex:1">
+          Depois
+        </button>
+        <button id="update-now" class="btn sm" style="
+          flex:2;
+          background:linear-gradient(180deg,var(--cool) 0%,#4d8fe8 100%);
+          color:#fff;
+          box-shadow:0 6px 18px -8px rgba(107,168,255,0.6);
+        ">
+          ${IC.sync(13)} Atualizar agora
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(banner);
+
+  // Atualizar agora: envia mensagem para o SW fazer skipWaiting
+  document.getElementById('update-now').addEventListener('click', () => {
+    // Avisa se há treino em andamento antes de recarregar
+    if(S.workout.on){
+      App.showConfirmDialog({
+        title: 'Atualizar durante treino',
+        message: 'O treino está em andamento e foi salvo em cache. Será restaurado após a atualização.',
+        confirmText: 'Atualizar mesmo assim',
+        cancelText:  'Cancelar',
+        isDangerous: false,
+        onConfirm: () => { WorkoutCache.save(); worker.postMessage({type:'SKIP_WAITING'}); },
+      });
+    } else {
+      worker.postMessage({type:'SKIP_WAITING'});
+    }
+  });
+
+  // Depois: remove o banner e não pergunta novamente nessa sessão
+  document.getElementById('update-later').addEventListener('click', () => {
+    banner.remove();
+  });
+
+  // Fechar (X): igual ao "Depois"
+  document.getElementById('update-dismiss').addEventListener('click', () => {
+    banner.remove();
+  });
+},
+
 // ─── BOOT ────────────────────────────────────────────────────────
 boot(){
   $('loading').style.display='none'; $('app').style.display='flex';
@@ -1630,6 +1958,13 @@ boot(){
 
   // [TIMER] Registra listener de visibilidade para corrigir timer após background
   document.addEventListener('visibilitychange', App._onVisibilityChange);
+
+  // [CACHE-WO] Verifica treino interrompido após o DB estar pronto
+  // (pequeno delay para garantir que o DOM da home já está renderizado)
+  setTimeout(() => App.checkWorkoutCache(), 600);
+
+  // [UPDATE] Inicia sistema de detecção de atualizações do SW
+  App.initUpdateSystem();
 
   // CSS de animação do sino
   if(!document.getElementById('evolv-notif-styles')){
@@ -1703,8 +2038,67 @@ toast(msg){
 
 // ─── PWA ─────────────────────────────────────────────────────────
 if('serviceWorker' in navigator){
-  const sw=`const C='evolv-v15';self.addEventListener('install',e=>{self.skipWaiting();});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==C&&k.startsWith('evolv-')).map(k=>caches.delete(k)))).then(()=>clients.claim()));});self.addEventListener('fetch',e=>{if(!e.request.url.startsWith('http'))return;e.respondWith(fetch(e.request).then(res=>{const copy=res.clone();caches.open(C).then(c=>c.put(e.request,copy));return res;}).catch(()=>caches.open(C).then(c=>c.match(e.request)).then(r=>r||new Response('',{status:503}))));});self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.matchAll({type:'window'}).then(cs=>{for(const c of cs){if(c.url&&'focus' in c)return c.focus();}if(clients.openWindow)return clients.openWindow('./');})  );});`;
-  navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});
+  // [UPDATE] SW atualizado: versão v16, listener de SKIP_WAITING para
+  // permitir que a página force a ativação do novo worker sem esperar
+  // todas as abas fecharem. Quando a página envia {type:'SKIP_WAITING'},
+  // o SW chama skipWaiting() e dispara o evento 'controllerchange'
+  // na página, que então recarrega automaticamente.
+  const sw=`
+const C='evolv-v16';
+
+self.addEventListener('install', e => {
+  // Não chama skipWaiting aqui — deixa a página decidir o momento certo.
+  // Isso evita que uma atualização recarregue o app no meio de um treino.
+  self.skipWaiting = self.skipWaiting; // mantém referência
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(
+        keys.filter(k => k !== C && k.startsWith('evolv-')).map(k => caches.delete(k))
+      ))
+      .then(() => clients.claim())
+  );
+});
+
+self.addEventListener('fetch', e => {
+  if(!e.request.url.startsWith('http')) return;
+  e.respondWith(
+    fetch(e.request)
+      .then(res => {
+        const copy = res.clone();
+        caches.open(C).then(c => c.put(e.request, copy));
+        return res;
+      })
+      .catch(() =>
+        caches.open(C)
+          .then(c => c.match(e.request))
+          .then(r => r || new Response('', {status:503}))
+      )
+  );
+});
+
+// [UPDATE] Recebe mensagem da página para forçar ativação imediata
+self.addEventListener('message', e => {
+  if(e.data && e.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(
+    clients.matchAll({type:'window'}).then(cs => {
+      for(const c of cs){ if(c.url && 'focus' in c) return c.focus(); }
+      if(clients.openWindow) return clients.openWindow('./');
+    })
+  );
+});
+`;
+  navigator.serviceWorker
+    .register(URL.createObjectURL(new Blob([sw], {type:'application/javascript'})))
+    .catch(() => {});
 }
 (()=>{
   const mf={name:'EVOLV',short_name:'EVOLV',theme_color:'#0E1015',background_color:'#0E1015',display:'standalone',orientation:'portrait',start_url:'.',icons:[{src:'icon.png',sizes:'512x512',type:'image/png',purpose:'any maskable'}]};
