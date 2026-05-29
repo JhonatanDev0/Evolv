@@ -1,25 +1,35 @@
 // ═══════════════════════════════════════════════════════════════
 // EVOLV — app logic
-// Correções aplicadas:
-//  1. Notificação push ao fim do timer
-//  2. requestNotifPermission() + banner no painel de notificações
-//  3. exportFichas() + downloadTemplate() restaurados
-//  4. Botões de exportar/modelo na toolbar de fichas
-//  5. Cálculo de meta de peso corrigido (5% abaixo do atual)
-//  6. showWeightGoalModal() + saveWeightGoal() para editar meta
+// Correções v2 aplicadas:
+//  [SEC-1] Escape de HTML em todos os templates com dados do usuário (XSS)
+//  [SEC-2] Sanitização de fichas importadas via JSON
+//  [TIMER] Timer resiliente a background via timestamp (iOS/PWA safe)
+//  [PERF]  renderAW() com atualização cirúrgica de checkboxes/progresso
+//          sem reconstruir o DOM inteiro a cada toque
 // ═══════════════════════════════════════════════════════════════
 
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyCvwm5Abo4sL0WTGcUdIBPUj4qUSDtO4J8",
   authDomain: "evolv-82ec2.firebaseapp.com",
-  // databaseURL é OBRIGATÓRIO para o Realtime Database
-  // Formato: https://<project-id>-default-rtdb.firebaseio.com
   databaseURL: "https://evolv-82ec2-default-rtdb.firebaseio.com",
   projectId: "evolv-82ec2",
   storageBucket: "evolv-82ec2.firebasestorage.app",
   messagingSenderId: "934840298557",
   appId: "1:934840298557:web:8f79f024e8e2d8ce6a0e54",
   measurementId: "G-E27HHXWXPX"
+};
+
+// ─── [SEC-1] HELPER DE ESCAPE HTML ───────────────────────────────
+// Usado em TODOS os lugares onde dados do usuário são inseridos no DOM.
+// Previne XSS via nomes de exercícios, fichas, observações, etc.
+const esc = s => {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 };
 
 // ─── ICON HELPER ─────────────────────────────────────────────────
@@ -78,26 +88,22 @@ const DB = {
   async init(){
     let cfg = FIREBASE_CONFIG;
 
-    // Se não tem config hardcoded, tenta ler do localStorage
     if(!cfg.apiKey){
       const saved = localStorage.getItem('evolv_fbcfg');
       if(saved) try{ cfg = JSON.parse(saved); }catch{}
     }
 
-    // Sem config → mostra tela de setup
     if(!cfg.apiKey){
       App.showFBSetup(true);
       return;
     }
 
-    // Usuário escolheu modo offline explicitamente
     if(localStorage.getItem('evolv_offline')==='1'){
-      console.info('[EVOLV] Modo offline ativo. Clique no ponto vermelho para reconectar.');
+      console.info('[EVOLV] Modo offline ativo.');
       DB._fallback();
       return;
     }
 
-    // Realtime Database EXIGE databaseURL — erro mais comum
     if(!cfg.databaseURL){
       const guessed = `https://${cfg.projectId}-default-rtdb.firebaseio.com`;
       console.warn(`[EVOLV] databaseURL ausente. Tentando: ${guessed}`);
@@ -107,12 +113,8 @@ const DB = {
     try{
       firebase.initializeApp(cfg);
       DB._db = firebase.database();
-
-      // Testa conectividade antes de continuar
       await DB._db.ref('.info/connected').once('value');
-
       const cred = await firebase.auth().signInAnonymously();
-      // Sync ID: permite reusar o mesmo path em múltiplos dispositivos
       let syncId = localStorage.getItem('evolv_sync_id');
       if(!syncId){ syncId = cred.user.uid; localStorage.setItem('evolv_sync_id', syncId); }
       DB._uid = syncId;
@@ -127,7 +129,6 @@ const DB = {
     } catch(e){
       console.error('[EVOLV] Firebase falhou:', e.code || e.message);
       DB._fallback();
-      // Avisa o usuário com a causa real
       const msg = e.code === 'auth/network-request-failed'
         ? 'Sem conexão com internet'
         : e.message?.includes('databaseURL') || e.code === 'app/invalid-credential'
@@ -310,8 +311,9 @@ renderHome(){
   }
 
   const suggestedFicha = fichas[0];
+  // [SEC-1] esc() em nomes de fichas e dias
   const heroTitle = suggestedFicha
-    ? `Pronto para <em>${(suggestedFicha.days?.[0]?.name || suggestedFicha.name).slice(0,28)}</em>?`
+    ? `Pronto para <em>${esc((suggestedFicha.days?.[0]?.name || suggestedFicha.name).slice(0,28))}</em>?`
     : `Sua evolução <em>começa aqui.</em>`;
   const heroMeta = suggestedFicha
     ? `<span>${IC.layers(14)} ${suggestedFicha.days?.length||0} dias</span><span>${IC.activity(14)} ${(suggestedFicha.days||[]).reduce((a,d)=>a+(d.exs||[]).length,0)} exercícios</span>`
@@ -326,10 +328,11 @@ renderHome(){
         const sets=(s.exs||[]).reduce((a,e)=>a+(e.sets||[]).filter(x=>x.done).length,0);
         const tag=String.fromCharCode(65+i);
         const color=S.fichaColors[i%S.fichaColors.length];
+        // [SEC-1] esc() em nomes vindos do banco
         return `<div class="wi">
           <div class="wi-ico" style="background:color-mix(in oklab, ${color} 14%, transparent);color:${color};border-color:color-mix(in oklab, ${color} 32%, transparent)">${tag}</div>
           <div class="wi-info">
-            <div class="wi-name">${d?.name||f?.name||'Treino'}</div>
+            <div class="wi-name">${esc(d?.name||f?.name||'Treino')}</div>
             <div class="wi-sub">${relTime(s.date)} · ${sets} séries</div>
           </div>
           <div class="wi-right">
@@ -391,7 +394,6 @@ renderFichas(){
   const sess=DB.sessoes();
   const root=$('pg-fichas');
 
-  // FIX 3: Toolbar com botões de exportar e modelo
   const top = `
     <div style="margin:4px 0 14px">
       <div class="eyebrow" style="color:var(--green)">Suas fichas</div>
@@ -442,6 +444,7 @@ renderFichas(){
       progress = total ? done/total : 0;
     }
 
+    // [SEC-1] esc() em todos os campos vindos do usuário
     return `<div class="fc">
       <div class="fc-accent" style="background:${color}"></div>
       <div class="fc-watermark" style="color:color-mix(in oklab, ${color} 8%, transparent)">${tag}</div>
@@ -449,12 +452,12 @@ renderFichas(){
         <div class="fc-head-info">
           <div class="fc-name">
             <span class="fc-tag" style="background:color-mix(in oklab, ${color} 18%, transparent);color:${color}">${tag}</span>
-            ${f.name}
+            ${esc(f.name)}
           </div>
           <div class="fc-meta">${(f.days||[]).length} dias · ${totalEx} exercícios</div>
         </div>
-        <button class="icon-btn" style="width:32px;height:32px;border-radius:9px" onclick="App.editFicha('${f.id}')">${IC.edit(14)}</button>
-        <button class="icon-btn danger" style="width:32px;height:32px;border-radius:9px" onclick="App.delFicha('${f.id}')">${IC.trash(14)}</button>
+        <button class="icon-btn" style="width:32px;height:32px;border-radius:9px" onclick="App.editFicha('${esc(f.id)}')">${IC.edit(14)}</button>
+        <button class="icon-btn danger" style="width:32px;height:32px;border-radius:9px" onclick="App.delFicha('${esc(f.id)}')">${IC.trash(14)}</button>
       </div>
       <div class="fc-stats">
         <div class="fc-stat"><div class="num">${(f.days||[]).length}</div><div class="lbl">dias</div></div>
@@ -472,11 +475,11 @@ renderFichas(){
       ` : ''}
       <div style="margin-top:14px">
         ${(f.days||[]).map((d,di)=>`
-          <div class="fc-day" onclick="App.startWorkout('${f.id}',${di})">
+          <div class="fc-day" onclick="App.startWorkout('${esc(f.id)}',${di})">
             <div class="dn" style="background:color-mix(in oklab, ${color} 14%, transparent);color:${color}">${di+1}</div>
             <div class="di">
-              <div class="dn2">${d.name}</div>
-              <div class="ds">${(d.exs||[]).map(e=>e.name).filter(Boolean).join(', ')||'—'}</div>
+              <div class="dn2">${esc(d.name)}</div>
+              <div class="ds">${esc((d.exs||[]).map(e=>e.name).filter(Boolean).join(', '))||'—'}</div>
             </div>
             <div class="dgo">${IC.play(12)}</div>
           </div>
@@ -533,32 +536,78 @@ setCustomTime(){
 
 toggleTimer(){ S.timer.running ? App.stopTimer() : App.startTimer(); },
 
+// ─── [TIMER] Timer resiliente a background ───────────────────────
+// Ao iniciar, salva o timestamp de fim no localStorage.
+// Ao voltar ao foco, recalcula o tempo restante a partir do timestamp.
+// Isso garante que o timer continue correto mesmo que o iOS/PWA
+// congele a aba e suspenda o setInterval.
 startTimer(){
   if(S.timer.rem<=0) S.timer.rem=S.timer.total;
   S.timer.running=true;
+
+  // Persiste o momento exato em que o timer deve acabar
+  const endAt = Date.now() + S.timer.rem * 1000;
+  localStorage.setItem('evolv_timer_end', String(endAt));
+
   App.setTimerStatus('Contando');
   App.setTimerPlayIcon(true);
+
   S.timer.iv=setInterval(()=>{
-    S.timer.rem--; App.updTimer();
-    if(S.timer.rem<=0){
+    // Recalcula sempre a partir do timestamp — imune a drift e background
+    const rem = Math.max(0, Math.round((+localStorage.getItem('evolv_timer_end') - Date.now()) / 1000));
+    S.timer.rem = rem;
+    App.updTimer();
+    if(rem<=0){
       App.stopTimer();
       App.setTimerStatus('Tempo!');
       if(navigator.vibrate) navigator.vibrate([250,100,250,100,250]);
       App.toast('Intervalo finalizado!');
-      // FIX 1: Dispara notificação push ao fim do timer
       App.sendTimerNotification();
     }
   },1000);
 },
 
 stopTimer(){
-  S.timer.running=false; clearInterval(S.timer.iv);
+  S.timer.running=false;
+  clearInterval(S.timer.iv);
+  localStorage.removeItem('evolv_timer_end');
   App.setTimerPlayIcon(false);
   App.setTimerStatus(S.timer.rem>0?'Pausado':'Pronto');
 },
 
-resetTimer(){ App.stopTimer(); S.timer.rem=S.timer.total; App.updTimer(); App.setTimerStatus('Pronto'); },
-bumpTimer(seconds){ S.timer.rem=Math.max(1,S.timer.rem+seconds); S.timer.total=Math.max(S.timer.total,S.timer.rem); App.updTimer(); },
+resetTimer(){
+  App.stopTimer();
+  S.timer.rem=S.timer.total;
+  App.updTimer();
+  App.setTimerStatus('Pronto');
+},
+
+bumpTimer(seconds){
+  // Atualiza tanto o rem quanto o timestamp persistido
+  S.timer.rem=Math.max(1,S.timer.rem+seconds);
+  S.timer.total=Math.max(S.timer.total,S.timer.rem);
+  if(S.timer.running){
+    const newEnd = Date.now() + S.timer.rem * 1000;
+    localStorage.setItem('evolv_timer_end', String(newEnd));
+  }
+  App.updTimer();
+},
+
+// Restaura o timer ao voltar ao foco (após iOS suspender a aba)
+_onVisibilityChange(){
+  if(document.visibilityState !== 'visible') return;
+  const endAt = +localStorage.getItem('evolv_timer_end');
+  if(!endAt || !S.timer.running) return;
+  const rem = Math.max(0, Math.round((endAt - Date.now()) / 1000));
+  S.timer.rem = rem;
+  App.updTimer();
+  if(rem <= 0){
+    App.stopTimer();
+    App.setTimerStatus('Tempo!');
+    App.toast('Intervalo finalizado!');
+    App.sendTimerNotification();
+  }
+},
 
 setTimerStatus(text){
   const a=$('tstatus'), b=$('aw-tstatus');
@@ -574,7 +623,6 @@ setTimerPlayIcon(paused){
   if(main) main.innerHTML=body;
 },
 
-// FIX 1: Notificação push quando o timer acaba em segundo plano
 sendTimerNotification(){
   App.notify('Intervalo finalizado!', 'timer');
   App._pushNotif('EVOLV — Timer','Intervalo encerrado. Próxima série!',{
@@ -582,7 +630,6 @@ sendTimerNotification(){
   });
 },
 
-// Centraliza envio de push — usa SW se disponível (funciona em 2º plano)
 _pushNotif(title, body, extra={}){
   if(!('Notification' in window) || Notification.permission!=='granted') return;
   const opts={body,icon:'icon.png',badge:'icon.png',vibrate:[200,100,200],requireInteraction:false,...extra};
@@ -599,7 +646,6 @@ async requestNotifPermission(){
   const r=await Notification.requestPermission();
   if(r==='granted'){
     App.notify('Notificações push ativadas!','success');
-    // Envia uma notificação de teste
     App._pushNotif('EVOLV','Notificações ativadas com sucesso!',{tag:'evolv-test'});
   } else {
     App.toast('Permissão negada');
@@ -713,7 +759,10 @@ renderStats(){
     ${topEx.length?`
     <div class="eyebrow" style="margin:22px 0 10px">Exercícios · top volume</div>
     <div>
-      ${topEx.map(([n,v])=>{const pct=(v/topMax)*100;return `<div class="lb-row"><div class="lb-head"><div class="lb-name">${n}</div><div class="lb-val">${v>=1000?(v/1000).toFixed(1)+'t':v+'kg'}</div></div><div class="lb-bar"><div class="lb-fill" style="width:${pct}%"></div></div></div>`;}).join('')}
+      ${topEx.map(([n,v])=>{const pct=(v/topMax)*100;
+        // [SEC-1] esc() no nome do exercício
+        return `<div class="lb-row"><div class="lb-head"><div class="lb-name">${esc(n)}</div><div class="lb-val">${v>=1000?(v/1000).toFixed(1)+'t':v+'kg'}</div></div><div class="lb-bar"><div class="lb-fill" style="width:${pct}%"></div></div></div>`;
+      }).join('')}
     </div>`:''}
   `;
 
@@ -756,10 +805,8 @@ renderPeso(){
   const minW=Math.min(...pesos.map(p=>p.w));
   const variation=((cur.w-first.w)/first.w*100).toFixed(1);
 
-  // FIX 5: Cálculo correto da meta — 5% abaixo do peso atual como padrão
   const savedGoal=+localStorage.getItem('evolv_peso_goal');
   const goal=savedGoal||Math.round(cur.w*0.95*2)/2;
-
   const progress=Math.min(1,Math.max(0,(first.w-cur.w)/Math.max(0.1,first.w-goal)));
 
   root.innerHTML=`
@@ -809,6 +856,7 @@ renderPeso(){
   `;
 
   const hist=$('peso-hist');
+  // [SEC-1] esc() em obs e period vindos do usuário
   hist.innerHTML=pesos.slice(-30).reverse().map((p,i,arr)=>{
     const prev=arr[i+1];
     const diff=prev?(p.w-prev.w).toFixed(1):null;
@@ -819,10 +867,10 @@ renderPeso(){
       <div class="pday"><div class="pday-d">${dayLabel}</div><div class="pday-t mono">${d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})}</div></div>
       <div class="pdata">
         <div><span class="pval">${p.w.toFixed(1)}<small>kg</small></span>${diff!==null?`<span class="pdif ${cls}">${+diff>0?'+':''}${diff}</span>`:''}</div>
-        ${p.obs?`<div class="pobs">${p.obs}</div>`:''}
+        ${p.obs?`<div class="pobs">${esc(p.obs)}</div>`:''}
       </div>
-      ${p.period?`<div class="pper">${p.period}</div>`:''}
-      <div class="del" onclick="App.delPeso('${p.id}')" title="Excluir">${IC.trash(13)}</div>
+      ${p.period?`<div class="pper">${esc(p.period)}</div>`:''}
+      <div class="del" onclick="App.delPeso('${esc(p.id)}')" title="Excluir">${IC.trash(13)}</div>
     </div>`;
   }).join('');
 
@@ -893,7 +941,6 @@ async delPeso(id){
   });
 },
 
-// FIX 6: Modal para editar meta de peso
 showWeightGoalModal(){
   App.closeModal();
   const pesos=DB.pesos();
@@ -904,7 +951,7 @@ showWeightGoalModal(){
     <div class="mhandle"></div>
     <div class="mtitle">Definir meta de peso</div>
     <div class="ig"><label>Meta (kg)</label>
-      <input type="number" id="goal-input" placeholder="ex: 75.0" step="0.5" min="30" max="300" value="${savedGoal}" inputmode="decimal">
+      <input type="number" id="goal-input" placeholder="ex: 75.0" step="0.5" min="30" max="300" value="${esc(savedGoal)}" inputmode="decimal">
     </div>
     <div style="background:var(--bg-3);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:16px">
       <div style="font-size:12px;color:var(--t2);margin-bottom:4px">Peso atual</div>
@@ -940,11 +987,11 @@ showAddFicha(ficha=null){
     <div class="mhandle"></div>
     <div class="mtitle">${ficha?'Editar ficha':'Nova ficha'}</div>
     <div class="ig"><label>Nome da ficha</label>
-      <input type="text" id="f-name" placeholder="ex: Hipertrofia ABC" value="${ficha?.name||''}">
+      <input type="text" id="f-name" placeholder="ex: Hipertrofia ABC" value="${esc(ficha?.name||'')}">
     </div>
     <div id="f-days"></div>
     <button class="btn bg" onclick="App.addDay()" style="margin-bottom:10px">${IC.plus(14)} Adicionar dia</button>
-    <button class="btn bp lg" onclick="App.saveFicha('${ficha?.id||''}')">Salvar</button>
+    <button class="btn bp lg" onclick="App.saveFicha('${esc(ficha?.id||'')}')">Salvar</button>
     <button class="btn bg" onclick="App.closeModal()" style="margin-top:8px">Cancelar</button>
   </div>`;
   m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
@@ -1025,12 +1072,12 @@ async showConfirmDialog(opts){
       <div class="mhandle"></div>
       <div class="confirm-content">
         <div class="confirm-icon">${isDangerous?IC.trash(28):IC.info(28)}</div>
-        <div class="confirm-title">${title}</div>
-        <div class="confirm-message">${message}</div>
+        <div class="confirm-title">${esc(title)}</div>
+        <div class="confirm-message">${esc(message)}</div>
       </div>
       <div class="confirm-actions">
-        <button class="btn bg" id="confirm-cancel">${cancelText}</button>
-        <button class="btn ${isDangerous?'bd':'bp'}" id="confirm-ok">${confirmText}</button>
+        <button class="btn bg" id="confirm-cancel">${esc(cancelText)}</button>
+        <button class="btn ${isDangerous?'bd':'bp'}" id="confirm-ok">${esc(confirmText)}</button>
       </div>
     </div>`;
     m.addEventListener('click',e=>{if(e.target===m){App.closeModal();resolve(false);}});
@@ -1055,7 +1102,7 @@ async delFicha(id){
   });
 },
 
-// ─── FIX 4: EXPORT / IMPORT ──────────────────────────────────────
+// ─── EXPORT / IMPORT ─────────────────────────────────────────────
 exportFichas(){
   const fichas=DB.fichas();
   if(!fichas.length){App.toast('Nenhuma ficha para exportar');return;}
@@ -1115,26 +1162,53 @@ handleImportFile(e){
 
 importFileSelector(){ $('import-file-input')?.click(); },
 
+// ─── [SEC-2] Importação com sanitização completa ─────────────────
+// Garante que nenhum campo de fichas importadas contenha tipos
+// inesperados. Strings são truncadas, números são coagidos,
+// campos extras são ignorados (allowlist explícita).
 async importFichasFromJson(raw){
   App.closeModal();
   if(!raw||!raw.trim()){App.toast('Cole um JSON válido.');return;}
+
+  // Helper: extrai string segura com limite de tamanho
+  const safeStr = (v, maxLen=200) => String(v||'').slice(0, maxLen).replace(/[<>]/g,'');
+  // Helper: número positivo dentro de faixa
+  const safeInt = (v, min=1, max=99, fallback=3) => {
+    const n = parseInt(v, 10);
+    return (isNaN(n) || n < min || n > max) ? fallback : n;
+  };
+
   try{
     const data=JSON.parse(raw);
     const itens=Array.isArray(data)?data:(data.fichas?data.fichas:[data]);
-    const valid=itens.filter(f=>f&&f.name&&Array.isArray(f.days));
+
+    // Valida campos obrigatórios ANTES de persistir qualquer coisa
+    const valid=itens.filter(f=>f && typeof f.name==='string' && f.name.trim() && Array.isArray(f.days));
+
     if(!valid.length){App.toast('Nenhum objeto de ficha válido.');return;}
+
     let imported=0;
     for(const ficha of valid){
+      // allowlist explícita: apenas name e days (com exs) são aceitos
       const item={
-        ...ficha,
-        days:ficha.days.map(d=>({
-          name:d.name||'Dia',
-          exs:(Array.isArray(d.exs)?d.exs:[]).map(e=>({name:e.name||'',sets:+e.sets||3,reps:+e.reps||12,w:+e.w||0}))
+        id: ficha.id && typeof ficha.id==='string' ? ficha.id : uid(),
+        at: Date.now(),
+        name: safeStr(ficha.name, 80),
+        days: (Array.isArray(ficha.days) ? ficha.days : []).slice(0, 30).map(d=>({
+          name: safeStr(d.name||'Dia', 80),
+          exs: (Array.isArray(d.exs) ? d.exs : []).slice(0, 50).map(e=>({
+            name: safeStr(e.name||'', 80),
+            sets: safeInt(e.sets, 1, 20, 3),
+            reps: safeInt(e.reps, 1, 200, 12),
+            w:    0,  // peso sempre começa em zero; não importa do JSON
+          })).filter(e=>e.name.trim()),
         })),
-        id:ficha.id||uid(),at:Date.now()
       };
+
+      // Evita ID duplicado
       if(DB.fichas().some(x=>x.id===item.id)) item.id=uid();
-      await DB.addFicha(item); imported++;
+      await DB.addFicha(item);
+      imported++;
     }
     App.renderFichas();
     App.notify(`${imported} ${imported===1?'ficha importada':'fichas importadas'}.`,'ficha');
@@ -1157,12 +1231,13 @@ showPickModal(){
     ${fichas.map((f,fi)=>{
       const color=S.fichaColors[fi%S.fichaColors.length];
       const tag=String.fromCharCode(65+fi);
+      // [SEC-1] esc() em nomes de fichas e dias
       return `<div style="margin-bottom:16px">
-        <div class="eyebrow" style="margin-bottom:8px"><span style="color:${color}">${tag}</span> · ${f.name}</div>
+        <div class="eyebrow" style="margin-bottom:8px"><span style="color:${color}">${tag}</span> · ${esc(f.name)}</div>
         ${(f.days||[]).map((d,di)=>`
-          <div class="wi" onclick="App.startWorkout('${f.id}',${di});App.closeModal()">
+          <div class="wi" onclick="App.startWorkout('${esc(f.id)}',${di});App.closeModal()">
             <div class="wi-ico" style="background:color-mix(in oklab, ${color} 14%, transparent);color:${color};border-color:color-mix(in oklab, ${color} 32%, transparent)">${di+1}</div>
-            <div class="wi-info"><div class="wi-name">${d.name}</div><div class="wi-sub">${(d.exs||[]).length} exercícios</div></div>
+            <div class="wi-info"><div class="wi-name">${esc(d.name)}</div><div class="wi-sub">${(d.exs||[]).length} exercícios</div></div>
             <div style="color:var(--green);display:flex">${IC.play(14)}</div>
           </div>
         `).join('')}
@@ -1218,17 +1293,54 @@ updateWorkoutResume(){
   }
 },
 
-renderAW(){
+// ─── [PERF] renderAW com atualização cirúrgica ───────────────────
+// Na primeira chamada (ou após addSet) reconstrói o DOM completo.
+// Nas chamadas subsequentes (togSet), apenas atualiza o checkbox
+// e o progresso — evitando perda de foco nos inputs mobile.
+renderAW(forceRebuild=false){
   const{exs}=S.workout;
   const done=exs.reduce((a,e)=>a+e.sets.filter(s=>s.done).length,0);
   const total=exs.reduce((a,e)=>a+e.sets.length,0);
-  $('aw-sub').textContent=`${exs.length} exercícios · ${done}/${total} séries`;
-  $('aw-pbar').style.width=total?`${(done/total)*100}%`:'0%';
+
+  // Atualiza sub e barra de progresso sempre (cirúrgico)
+  const subEl=$('aw-sub');
+  if(subEl) subEl.textContent=`${exs.length} exercícios · ${done}/${total} séries`;
+  const pbar=$('aw-pbar');
+  if(pbar) pbar.style.width=total?`${(done/total)*100}%`:'0%';
   App.updateWorkoutResume();
-  $('aw-body').innerHTML=exs.map((ex,ei)=>{
+
+  const body=$('aw-body');
+  const alreadyBuilt = body && body.querySelector('.ex-card');
+
+  if(!forceRebuild && alreadyBuilt){
+    // Atualização cirúrgica: só toca nos checkboxes e tags de contagem
+    exs.forEach((ex,ei)=>{
+      const card=body.querySelectorAll('.ex-card')[ei]; if(!card) return;
+      const doneCount=ex.sets.filter(s=>s.done).length;
+      const tag=card.querySelector('.ex-tag');
+      if(tag) tag.textContent=`${doneCount}/${ex.sets.length}`;
+      card.classList.toggle('glow', ex.sets.every(s=>s.done));
+      ex.sets.forEach((s,si)=>{
+        const chk=card.querySelectorAll('.set-chk')[si]; if(!chk) return;
+        const wasDone=chk.classList.contains('done');
+        if(wasDone !== s.done){
+          chk.classList.toggle('done',s.done);
+          chk.innerHTML=s.done?IC.check(16):'';
+          // Atualiza opacidade dos inputs da linha sem recriar
+          const row=card.querySelectorAll('.set-row')[si]; if(!row) return;
+          row.querySelectorAll('input').forEach(inp=>inp.style.opacity=s.done?'0.45':'');
+        }
+      });
+    });
+    return;
+  }
+
+  // Rebuild completo (primeira vez ou após addSet)
+  // [SEC-1] esc() em nomes de exercícios
+  body.innerHTML=exs.map((ex,ei)=>{
     const allDone=ex.sets.every(s=>s.done);
     return `<div class="ex-card ${allDone?'glow':''}">
-      <div class="ex-hdr"><div class="ex-name">${ex.name}</div><span class="ex-tag">${ex.sets.filter(s=>s.done).length}/${ex.sets.length}</span></div>
+      <div class="ex-hdr"><div class="ex-name">${esc(ex.name)}</div><span class="ex-tag">${ex.sets.filter(s=>s.done).length}/${ex.sets.length}</span></div>
       <div class="sets-hdr"><span></span><span>Carga (kg)</span><span>Reps</span><span></span></div>
       ${ex.sets.map((s,si)=>`
         <div class="set-row">
@@ -1243,11 +1355,20 @@ renderAW(){
 },
 
 updSet(ei,si,f,v){ S.workout.exs[ei].sets[si][f]=+v; },
+
 togSet(ei,si){
-  const s=S.workout.exs[ei].sets[si]; s.done=!s.done; App.renderAW();
+  const s=S.workout.exs[ei].sets[si]; s.done=!s.done;
+  // Atualização cirúrgica — não reconstrói o DOM
+  App.renderAW(false);
   if(s.done){ App.addSeries(1); App.resetTimer(); App.startTimer(); App.toast('Timer iniciado!'); }
 },
-addSet(ei){ const e=S.workout.exs[ei]; e.sets.push({reps:e.tr,w:0,done:false}); App.renderAW(); },
+
+addSet(ei){
+  const e=S.workout.exs[ei]; e.sets.push({reps:e.tr,w:0,done:false});
+  // Rebuild completo pois estrutura mudou
+  App.renderAW(true);
+},
+
 async cancelWorkout(){
   await App.showConfirmDialog({
     title:'Descartar treino',
@@ -1267,7 +1388,9 @@ async _endWO(save){
   if(save){
     try{
       await DB.addSessao({id:uid(),fichaId:S.workout.fichaId,dayIdx:S.workout.dayIdx,date:new Date().toISOString(),dur:Math.floor((Date.now()-S.workout.t0)/1000),exs:S.workout.exs.map(e=>({name:e.name,sets:e.sets}))});
-      App.notify('Treino concluído!','workout'); App._pushNotif('EVOLV — Treino','Treino finalizado. Excelente trabalho!',{tag:'evolv-workout'}); App.resetSeries();
+      App.notify('Treino concluído!','workout');
+      App._pushNotif('EVOLV — Treino','Treino finalizado. Excelente trabalho!',{tag:'evolv-workout'});
+      App.resetSeries();
     }catch(e){App.toast('Erro ao salvar treino.');}
   }
   $('aw').classList.remove('open'); S.workout={on:false,minimized:false,exs:[]};
@@ -1286,14 +1409,12 @@ renderNotifyBadge(){
   const unread=S.notifications.filter(n=>!n.read).length;
   badge.textContent=unread>9?'9+':unread||'';
   badge.classList.toggle('has',unread>0);
-  // Animação no sino quando nova notificação chega
   const btn=$('notify-btn');
   if(btn&&unread>0){btn.classList.add('np-bell-shake');setTimeout(()=>btn.classList.remove('np-bell-shake'),600);}
 },
 
 showNotifications(){
   App.closeModal();
-  // Marca como lidas ao abrir
   S.notifications.forEach(n=>n.read=true);
   localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
   App.renderNotifyBadge();
@@ -1301,7 +1422,6 @@ showNotifications(){
   const m=document.createElement('div');m.className='mo';
   m.innerHTML=`<div class="md" style="padding-left:0;padding-right:0">
     <div class="mhandle" style="margin-left:auto;margin-right:auto"></div>
-    <!-- Cabeçalho -->
     <div style="display:flex;align-items:center;justify-content:space-between;padding:0 20px 14px;border-bottom:1px solid var(--line)">
       <div>
         <div style="font-size:20px;font-weight:700;letter-spacing:-0.02em">Notificações</div>
@@ -1312,9 +1432,7 @@ showNotifications(){
           ${IC.trash(13)} Limpar tudo
         </button>`:''}
     </div>
-    <!-- Banner de permissão push -->
     <div id="np-perm-banner" style="padding:0 20px"></div>
-    <!-- Lista -->
     <div id="np-list" style="padding:0 20px;max-height:55vh;overflow-y:auto"></div>
     <div style="padding:14px 20px 0">
       <button class="btn bg" onclick="App.closeModal()">Fechar</button>
@@ -1356,6 +1474,7 @@ _renderNotifItems(){
     </div>`;
     return;
   }
+  // [SEC-1] esc() em mensagens de notificação
   el.innerHTML=S.notifications.map(n=>{
     const cfg=NOTIF_CONFIG[n.type]||NOTIF_CONFIG.info;
     const timeStr=relTime(n.date);
@@ -1364,10 +1483,10 @@ _renderNotifItems(){
         ${cfg.ic(16)}
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:13.5px;font-weight:500;color:var(--t0);line-height:1.35">${n.msg}</div>
+        <div style="font-size:13.5px;font-weight:500;color:var(--t0);line-height:1.35">${esc(n.msg)}</div>
         <div style="font-size:11px;color:var(--t2);margin-top:4px;font-family:var(--mono)">${timeStr}</div>
       </div>
-      <button onclick="App.deleteNotification('${n.id}')" title="Apagar"
+      <button onclick="App.deleteNotification('${esc(n.id)}')" title="Apagar"
         style="width:28px;height:28px;border-radius:8px;background:transparent;color:var(--t3);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .12s"
         onmouseenter="this.style.background='var(--red-dim)';this.style.color='var(--red)'"
         onmouseleave="this.style.background='transparent';this.style.color='var(--t3)'">
@@ -1382,7 +1501,6 @@ deleteNotification(id){
   localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
   App.renderNotifyBadge();
   App._renderNotifItems();
-  // Atualiza contador no cabeçalho
   const sub=document.querySelector('#mroot .mo .md div[style*="registros"]');
   if(sub) sub.textContent=`${S.notifications.length} registros`;
 },
@@ -1404,7 +1522,7 @@ notify(msg,type='info'){
   App.toast(msg);
 },
 
-// ─── SYNC ENTRE DISPOSITIVOS ─────────────────────────────────────
+// ─── SYNC ────────────────────────────────────────────────────────
 showSyncModal(){
   App.closeModal();
   const sid=localStorage.getItem('evolv_sync_id')||'—';
@@ -1420,18 +1538,16 @@ showSyncModal(){
         <div style="font-size:12px;color:var(--t2);margin-top:1px">Acesse seus dados em qualquer aparelho</div>
       </div>
     </div>
-
     <div class="card" style="margin-bottom:10px">
       <div class="eyebrow" style="margin-bottom:10px">Seu código de sync</div>
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
-        <div style="flex:1;background:var(--bg-3);border:1px solid var(--line-2);border-radius:10px;padding:11px 14px;font-family:var(--mono);font-size:11.5px;color:var(--green);letter-spacing:0.04em;word-break:break-all">${sid}</div>
-        <button onclick="(navigator.clipboard?.writeText('${sid}')||Promise.reject()).then(()=>App.toast('Código copiado!')).catch(()=>App.toast('Selecione e copie o código manualmente'))" style="width:40px;height:40px;border-radius:11px;background:var(--green-dim);color:var(--green);border:1px solid var(--green-line);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <div style="flex:1;background:var(--bg-3);border:1px solid var(--line-2);border-radius:10px;padding:11px 14px;font-family:var(--mono);font-size:11.5px;color:var(--green);letter-spacing:0.04em;word-break:break-all">${esc(sid)}</div>
+        <button onclick="(navigator.clipboard?.writeText('${esc(sid)}')||Promise.reject()).then(()=>App.toast('Código copiado!')).catch(()=>App.toast('Selecione e copie o código manualmente'))" style="width:40px;height:40px;border-radius:11px;background:var(--green-dim);color:var(--green);border:1px solid var(--green-line);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0">
           ${IC.clipboard(16)}
         </button>
       </div>
       <div style="font-size:12px;color:var(--t2);line-height:1.55">Compartilhe este código no outro aparelho para sincronizar todos os seus dados.</div>
     </div>
-
     <div class="card" style="margin-bottom:10px">
       <div class="eyebrow" style="margin-bottom:10px">Entrar com código de outro aparelho</div>
       <div class="ig" style="margin-bottom:10px">
@@ -1439,7 +1555,6 @@ showSyncModal(){
       </div>
       <button class="btn bp" onclick="App.applySyncCode()">${IC.sync(15)} Conectar e recarregar</button>
     </div>
-
     <div style="background:rgba(245,192,74,0.09);border:1px solid rgba(245,192,74,0.28);border-radius:12px;padding:13px;margin-bottom:14px">
       <div style="font-size:12px;color:var(--amber);line-height:1.6">
         <strong>⚠ Firebase Rules</strong> — Para o sync funcionar entre dispositivos, atualize as regras do Realtime Database em <em>console.firebase.google.com</em>:<br>
@@ -1451,7 +1566,6 @@ showSyncModal(){
 }</code>
       </div>
     </div>
-
     <button class="btn bg" onclick="App.closeModal()">Fechar</button>
   </div>`;
   m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
@@ -1507,11 +1621,17 @@ boot(){
   App.renderHome();
   App.updateDot();
   try{App.sound.init();}catch{}
+
   document.addEventListener('click',e=>{
     try{ if(!App.sound.enabled)return; const btn=e.target.closest('button,.ni,.icon-btn'); if(btn)App.sound.play('click'); }catch{}
   },{capture:false});
+
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();App._ip=e;});
-  // Injeta CSS do sino animado
+
+  // [TIMER] Registra listener de visibilidade para corrigir timer após background
+  document.addEventListener('visibilitychange', App._onVisibilityChange);
+
+  // CSS de animação do sino
   if(!document.getElementById('evolv-notif-styles')){
     const s=document.createElement('style');
     s.id='evolv-notif-styles';
@@ -1520,7 +1640,6 @@ boot(){
       .np-bell-shake svg{animation:np-shake .55s ease}
       #notify-btn{transition:background .15s}
       #notify-btn:hover{background:var(--bg-3)}
-      /* iOS PWA navbar: full-width bottom bar, matching the finance app. */
       #nav{position:fixed!important;left:14px!important;right:14px!important;bottom:0!important;flex-shrink:0;height:var(--nav-h)!important;border-radius:20px 20px 0 0!important;border:1px solid var(--line-2)!important;border-bottom:0!important;align-items:center!important;padding:0 6px!important;box-shadow:0 -12px 32px rgba(0,0,0,.35)!important}
       .ni{position:relative!important}
       .ni + .ni::before{content:'';position:absolute;left:0;top:13px;bottom:13px;width:1px;background:var(--line-2)}
@@ -1552,8 +1671,6 @@ updateDot(){
 
 showReconnectModal(){
   App.closeModal();
-  const cfg=FIREBASE_CONFIG;
-  const hasCfg=!!(cfg.apiKey||(()=>{try{return JSON.parse(localStorage.getItem('evolv_fbcfg')||'{}').apiKey;}catch{return false;}})());
   const m=document.createElement('div');m.className='mo';
   m.innerHTML=`<div class="md">
     <div class="mhandle"></div>
