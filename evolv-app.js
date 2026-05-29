@@ -1094,7 +1094,7 @@ showImportFicha(){
     <div class="mhandle"></div>
     <div class="mtitle">Importar fichas JSON</div>
     <div class="ig"><label>Cole o JSON abaixo</label>
-      <textarea id="import-json" placeholder='[{"name":"Ficha A","days":[{"name":"Dia 1","exs":[{"name":"Agachamento","sets":4,"reps":10}]}]}]' style="min-height:140px"></textarea>
+      <textarea id="import-json" style="min-height:140px"></textarea>
     </div>
     <button class="btn bp" onclick="App.importFichasFromJson(document.getElementById('import-json').value)">Importar</button>
     <button class="btn bg" onclick="App.importFileSelector()" style="margin-top:8px">${IC.download(14)} Selecionar arquivo</button>
