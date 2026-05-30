@@ -147,7 +147,7 @@ const NOTIF_CONFIG = {
 
 // ─── DB ──────────────────────────────────────────────────────────
 const DB = {
-  cache:{fichas:[],sessoes:[],pesos:[]},
+  cache:{fichas:[],sessoes:[],pesos:[],prefs:{}},
   ready:false, _local:false, _db:null, _uid:null,
   _loadCount:0, _resolveReady:null, _online:true,
 
@@ -186,7 +186,10 @@ const DB = {
       DB._uid = syncId;
       console.info('[EVOLV] Firebase conectado. SyncID:', DB._uid);
 
-      DB._listen('fichas'); DB._listen('sessoes'); DB._listen('pesos');
+      DB._listen('fichas'); DB._listen('sessoes'); DB._listen('pesos'); DB._listenPrefs();
+
+      // Migra prefs antigas do localStorage para Firebase (roda só uma vez)
+      DB._migratePrefs();
 
       window.addEventListener('online',  ()=>{ DB._online=true;  App.updateDot(); });
       window.addEventListener('offline', ()=>{ DB._online=false; App.updateDot(); });
@@ -214,15 +217,26 @@ const DB = {
       if(name==='sessoes') DB.cache.sessoes.sort((a,b)=>a.date.localeCompare(b.date));
       if(name==='fichas') DB.cache.fichas.sort((a,b)=>(a.at||0)-(b.at||0));
       DB._loadCount++;
-      if(DB._loadCount >= 3 && !DB.ready){ DB.ready=true; DB._resolveReady(); }
+      if(DB._loadCount >= 4 && !DB.ready){ DB.ready=true; DB._resolveReady(); }
       else if(DB.ready){ App.renderPage(S.page); }
-    }, err=>{ DB._loadCount++; if(DB._loadCount>=3 && !DB.ready){DB.ready=true; DB._resolveReady();} });
+    }, err=>{ DB._loadCount++; if(DB._loadCount>=4 && !DB.ready){DB.ready=true; DB._resolveReady();} });
   },
 
   _fallback(){
     DB._local=true;
     const g=(k)=>{try{return JSON.parse(localStorage.getItem('ev_'+k))||[]}catch{return[]}};
-    DB.cache={fichas:g('fichas'),sessoes:g('sessoes'),pesos:g('pesos')};
+    const gObj=(k)=>{try{return JSON.parse(localStorage.getItem('ev_'+k))||{}}catch{return{}}};
+    // Fallback de prefs: lê do localStorage legado também
+    const prefsLocal = gObj('prefs');
+    if(!prefsLocal.weekTarget){
+      const wt=localStorage.getItem('evolv_week_target');
+      if(wt) prefsLocal.weekTarget=+wt;
+    }
+    if(!prefsLocal.pesoGoal){
+      const pg=localStorage.getItem('evolv_peso_goal');
+      if(pg) prefsLocal.pesoGoal=+pg;
+    }
+    DB.cache={fichas:g('fichas'),sessoes:g('sessoes'),pesos:g('pesos'),prefs:prefsLocal};
     DB.ready=true; DB._resolveReady();
   },
 
@@ -255,6 +269,68 @@ const DB = {
   async delPeso(id){
     if(DB._local){DB.cache.pesos=DB.cache.pesos.filter(p=>p.id!==id);DB._lsave('pesos');App.renderPeso();return;}
     await DB._col('pesos').child(id).remove();
+  },
+
+  // ─── PREFS ───────────────────────────────────────────────────
+  // Preferências do usuário (ex: meta semanal, meta de peso).
+  // Armazenadas em users/$uid/prefs — um único objeto flat.
+  // No modo offline usa localStorage como fallback.
+  // getPrefs() é síncrono pois o cache é populado no _listenPrefs.
+  // setPrefs(patch) faz merge — só sobrescreve as chaves enviadas.
+  //
+  // Estrutura: { weekTarget: 5, pesoGoal: 75, ... }
+  //
+  // MIGRAÇÃO: se houver valores em localStorage (versão anterior),
+  // eles são movidos para o Firebase automaticamente na primeira vez.
+
+  getPrefs(){ return DB.cache.prefs||{}; },
+
+  getPref(key, defaultVal){
+    const v = DB.cache.prefs?.[key];
+    return v !== undefined ? v : defaultVal;
+  },
+
+  async setPref(key, value){
+    const patch = {[key]: value};
+    DB.cache.prefs = {...(DB.cache.prefs||{}), ...patch};
+    if(DB._local){
+      localStorage.setItem('ev_prefs', JSON.stringify(DB.cache.prefs));
+      return;
+    }
+    await DB._col('prefs').update(patch);
+  },
+
+  _listenPrefs(){
+    DB._col('prefs').on('value', snap=>{
+      DB.cache.prefs = snap.val() || {};
+      DB._loadCount++;
+      if(DB._loadCount >= 4 && !DB.ready){ DB.ready=true; DB._resolveReady(); }
+      else if(DB.ready){ App.renderPage(S.page); }
+    }, ()=>{ DB._loadCount++; if(DB._loadCount>=4 && !DB.ready){DB.ready=true; DB._resolveReady();} });
+  },
+
+  // Migra prefs antigas do localStorage para o Firebase (roda uma vez)
+  async _migratePrefs(){
+    if(DB._local) return;
+    const migrated = localStorage.getItem('ev_prefs_migrated');
+    if(migrated) return;
+
+    const patch = {};
+
+    // Meta semanal (chave antiga)
+    const wt = localStorage.getItem('evolv_week_target');
+    if(wt) patch.weekTarget = +wt;
+
+    // Meta de peso (chave antiga)
+    const pg = localStorage.getItem('evolv_peso_goal');
+    if(pg) patch.pesoGoal = +pg;
+
+    if(Object.keys(patch).length){
+      await DB._col('prefs').update(patch);
+      console.info('[EVOLV] Prefs migradas para Firebase:', patch);
+    }
+
+    localStorage.setItem('ev_prefs_migrated', '1');
   },
 };
 DB.whenReady = new Promise(r=>{DB._resolveReady=r;});
@@ -421,7 +497,8 @@ renderHome(){
       </div>`;
 
   const dayLabels=['D','S','T','Q','Q','S','S'];
-  const weekTarget = 5;
+  const weekTarget = DB.getPref('weekTarget', 5);
+  const weekDone   = new Set(wk.map(s=>s.date.slice(0,10))).size;
   const weekDots = Array.from({length:7}).map((_,i)=>{
     const d=new Date(now); d.setDate(now.getDate()-(6-i));
     const k=d.toISOString().slice(0,10);
@@ -444,7 +521,7 @@ renderHome(){
     <div class="srow">
       <div class="sc">
         <div class="sl">Semana</div>
-        <div class="sv">${wk.length}<small>/${weekTarget}</small></div>
+        <div class="sv">${weekDone}<small>/${weekTarget}</small></div>
         <div class="ss">treinos</div>
       </div>
       <div class="sc">
@@ -461,8 +538,22 @@ renderHome(){
     <div class="card">
       <div class="between" style="margin-bottom:12px">
         <div class="eyebrow">Esta semana</div>
-        <div class="meta">${wk.length} / ${weekTarget} planejado</div>
+        <button onclick="App.showWeekTargetModal()" style="
+          display:flex;align-items:center;gap:5px;
+          color:${weekDone>=weekTarget?'var(--green)':'var(--t2)'};
+          font-size:12px;font-family:var(--font);font-weight:600;
+          background:none;border:1px solid var(--line-2);
+          border-radius:8px;padding:4px 10px;cursor:pointer;
+          transition:color .15s,border-color .15s;
+        ">
+          ${weekDone>=weekTarget?IC.check(12):IC.edit(12)}
+          ${weekDone} / ${weekTarget} dias
+        </button>
       </div>
+      ${weekDone>0?`
+      <div class="prog-track" style="margin-bottom:12px">
+        <div class="prog-bar" style="width:${Math.min(100,Math.round(weekDone/weekTarget*100))}%;background:${weekDone>=weekTarget?'var(--green)':'var(--cool)'}"></div>
+      </div>`:''}
       <div class="wk-grid">${weekDots}</div>
     </div>
     <div class="between" style="padding:18px 2px 8px">
@@ -473,7 +564,48 @@ renderHome(){
   `;
 },
 
-// ─── FICHAS ──────────────────────────────────────────────────────
+// ─── META SEMANAL ─────────────────────────────────────────────────
+showWeekTargetModal(){
+  App.closeModal();
+  const current = DB.getPref('weekTarget', 5);
+  const m=document.createElement('div'); m.className='mo';
+  m.innerHTML=`<div class="md">
+    <div class="mhandle"></div>
+    <div class="mtitle">Meta semanal de treinos</div>
+    <div style="font-size:13px;color:var(--t2);margin:-10px 0 18px;line-height:1.5">
+      Quantos dias por semana você planeja treinar?
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">
+      ${[2,3,4,5,6,7].map(n=>`
+        <button onclick="App.saveWeekTarget(${n})" style="
+          height:56px;border-radius:14px;
+          background:${n===current?'var(--green-dim)':'var(--bg-3)'};
+          border:1.5px solid ${n===current?'var(--green-line)':'var(--line-2)'};
+          color:${n===current?'var(--green)':'var(--t1)'};
+          font-family:var(--mono);font-weight:700;font-size:20px;
+          cursor:pointer;transition:all .15s;display:flex;flex-direction:column;
+          align-items:center;justify-content:center;gap:2px;
+        ">
+          ${n}
+          <span style="font-size:9px;font-family:var(--font);font-weight:600;
+            letter-spacing:.1em;text-transform:uppercase;opacity:.6">
+            ${n===1?'dia':'dias'}
+          </span>
+        </button>
+      `).join('')}
+    </div>
+    <button class="btn bg" onclick="App.closeModal()">Cancelar</button>
+  </div>`;
+  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
+  $('mroot').appendChild(m);
+},
+
+saveWeekTarget(n){
+  DB.setPref('weekTarget', n);
+  App.closeModal();
+  App.renderHome();
+  App.toast(`Meta: ${n} treinos por semana`);
+},
 renderFichas(){
   const fichas=DB.fichas();
   const sess=DB.sessoes();
@@ -1007,8 +1139,8 @@ renderPeso(){
   const minW=Math.min(...pesos.map(p=>p.w));
   const variation=((cur.w-first.w)/first.w*100).toFixed(1);
 
-  const savedGoal=+localStorage.getItem('evolv_peso_goal');
-  const goal=savedGoal||Math.round(cur.w*0.95*2)/2;
+  const savedGoal = DB.getPref('pesoGoal', 0);
+  const goal = savedGoal || Math.round(cur.w*0.95*2)/2;
   const progress=Math.min(1,Math.max(0,(first.w-cur.w)/Math.max(0.1,first.w-goal)));
 
   root.innerHTML=`
@@ -1147,13 +1279,13 @@ showWeightGoalModal(){
   App.closeModal();
   const pesos=DB.pesos();
   const cur=pesos.length?pesos[pesos.length-1].w:0;
-  const savedGoal=localStorage.getItem('evolv_peso_goal')||'';
+  const savedGoal = DB.getPref('pesoGoal', 0);
   const m=document.createElement('div');m.className='mo';
   m.innerHTML=`<div class="md">
     <div class="mhandle"></div>
     <div class="mtitle">Definir meta de peso</div>
     <div class="ig"><label>Meta (kg)</label>
-      <input type="number" id="goal-input" placeholder="ex: 75.0" step="0.5" min="30" max="300" value="${esc(savedGoal)}" inputmode="decimal">
+      <input type="number" id="goal-input" placeholder="ex: 75.0" step="0.5" min="30" max="300" value="${savedGoal?savedGoal:''}" inputmode="decimal">
     </div>
     <div style="background:var(--bg-3);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:16px">
       <div style="font-size:12px;color:var(--t2);margin-bottom:4px">Peso atual</div>
@@ -1172,12 +1304,12 @@ showWeightGoalModal(){
 saveWeightGoal(){
   const v=parseFloat($('goal-input')?.value);
   if(!v||v<30||v>300){App.toast('Informe um peso válido');return;}
-  localStorage.setItem('evolv_peso_goal',v);
+  DB.setPref('pesoGoal', v);
   App.closeModal(); App.toast(`Meta: ${v.toFixed(1)}kg definida!`); App.renderPeso();
 },
 
 clearWeightGoal(){
-  localStorage.removeItem('evolv_peso_goal');
+  DB.setPref('pesoGoal', 0);
   App.closeModal(); App.toast('Meta removida.'); App.renderPeso();
 },
 
