@@ -7,13 +7,13 @@
 //  [PERF]  renderAW() com atualização cirúrgica de checkboxes/progresso
 //
 // Melhorias v3:
-//  [CACHE-WO] Cache de treino em andamento — persiste estado completo no
-//             localStorage a cada interação; restaura automaticamente ao
-//             reabrir o app, com banner de recuperação e opção de descartar.
-//  [UPDATE]   Sistema de atualização via Service Worker — detecta novo SW
-//             disponível e exibe banner não-intrusivo com opções
-//             "Atualizar agora" e "Depois". Atualizar agora faz skipWaiting
-//             + reload; "Depois" descarta o banner até o próximo ciclo.
+//  [CACHE-WO] Cache de treino em andamento
+//  [UPDATE]   Sistema de atualização via Service Worker
+//
+// Infra v4:
+//  [IDB]      IndexedDB como storage local persistente (substitui localStorage)
+//  [SYNC]     Fila de sync offline — writes enfileirados, drenados ao reconectar
+//  [DOT]      Status dot com 3 estados: online / offline / sincronizando
 // ═══════════════════════════════════════════════════════════════
 
 const FIREBASE_CONFIG = {
@@ -26,6 +26,179 @@ const FIREBASE_CONFIG = {
   appId: "1:934840298557:web:8f79f024e8e2d8ce6a0e54",
   measurementId: "G-E27HHXWXPX"
 };
+
+// ─── [IDB] IndexedDB wrapper ──────────────────────────────────────
+// Substitui localStorage para dados do usuário.
+// API simétrica ao localStorage mas assíncrona e sem limite de 5MB.
+// Stores: fichas | sessoes | pesos | prefs | sync_queue
+const IDB = {
+  _db: null,
+  DB_NAME: 'evolv_db',
+  DB_VER:  2,
+  STORES:  ['fichas','sessoes','pesos','prefs','sync_queue'],
+
+  async open(){
+    if(IDB._db) return IDB._db;
+    return new Promise((res, rej)=>{
+      const req = indexedDB.open(IDB.DB_NAME, IDB.DB_VER);
+      req.onupgradeneeded = e=>{
+        const db = e.target.result;
+        IDB.STORES.forEach(name=>{
+          if(!db.objectStoreNames.contains(name))
+            db.createObjectStore(name, {keyPath: name==='prefs'?'key':'id'});
+        });
+      };
+      req.onsuccess = e=>{ IDB._db = e.target.result; res(IDB._db); };
+      req.onerror   = e=>rej(e.target.error);
+    });
+  },
+
+  async getAll(store){
+    const db = await IDB.open();
+    return new Promise((res, rej)=>{
+      const tx  = db.transaction(store,'readonly');
+      const req = tx.objectStore(store).getAll();
+      req.onsuccess = ()=>res(req.result||[]);
+      req.onerror   = ()=>rej(req.error);
+    });
+  },
+
+  async put(store, obj){
+    const db = await IDB.open();
+    return new Promise((res, rej)=>{
+      const tx  = db.transaction(store,'readwrite');
+      const req = tx.objectStore(store).put(obj);
+      req.onsuccess = ()=>res();
+      req.onerror   = ()=>rej(req.error);
+    });
+  },
+
+  async del(store, id){
+    const db = await IDB.open();
+    return new Promise((res, rej)=>{
+      const tx  = db.transaction(store,'readwrite');
+      const req = tx.objectStore(store).delete(id);
+      req.onsuccess = ()=>res();
+      req.onerror   = ()=>rej(req.error);
+    });
+  },
+
+  async clear(store){
+    const db = await IDB.open();
+    return new Promise((res, rej)=>{
+      const tx  = db.transaction(store,'readwrite');
+      const req = tx.objectStore(store).clear();
+      req.onsuccess = ()=>res();
+      req.onerror   = ()=>rej(req.error);
+    });
+  },
+
+  // Salva array inteiro substituindo store
+  async setAll(store, items){
+    const db = await IDB.open();
+    return new Promise((res, rej)=>{
+      const tx = db.transaction(store,'readwrite');
+      const os = tx.objectStore(store);
+      os.clear();
+      items.forEach(item=>os.put(item));
+      tx.oncomplete = ()=>res();
+      tx.onerror    = ()=>rej(tx.error);
+    });
+  },
+
+  // Prefs: { key, value } pairs
+  async getPref(key){
+    const db = await IDB.open();
+    return new Promise((res)=>{
+      const tx  = db.transaction('prefs','readonly');
+      const req = tx.objectStore('prefs').get(key);
+      req.onsuccess = ()=>res(req.result?.value);
+      req.onerror   = ()=>res(undefined);
+    });
+  },
+
+  async setPref(key, value){
+    return IDB.put('prefs', {key, value});
+  },
+
+  // Migra dados do localStorage para IDB (roda uma vez)
+  async migrateFromLocalStorage(){
+    if(localStorage.getItem('evolv_idb_migrated')) return;
+    try{
+      const g = k=>{ try{ return JSON.parse(localStorage.getItem('ev_'+k))||[]; }catch{ return []; } };
+      const fichas  = g('fichas');
+      const sessoes = g('sessoes');
+      const pesos   = g('pesos');
+      const prefs   = (() => { try{ return JSON.parse(localStorage.getItem('ev_prefs'))||{}; }catch{ return {}; } })();
+      if(fichas.length)  await IDB.setAll('fichas',  fichas);
+      if(sessoes.length) await IDB.setAll('sessoes', sessoes);
+      if(pesos.length)   await IDB.setAll('pesos',   pesos);
+      // Migra prefs para formato key/value
+      for(const [k,v] of Object.entries(prefs)) await IDB.setPref(k,v);
+      localStorage.setItem('evolv_idb_migrated','1');
+      console.info('[EVOLV] Dados migrados localStorage → IDB');
+    }catch(e){
+      console.warn('[EVOLV] Migração IDB falhou (não crítico):', e);
+    }
+  },
+};
+
+// ─── [SYNC] Fila de operações offline ────────────────────────────
+// Cada item: { id, op:'set'|'update'|'remove', col, docId, data, ts }
+// Quando online, drena a fila em ordem e sincroniza com Firebase.
+const SyncQueue = {
+  _draining: false,
+
+  async push(op, col, docId, data=null){
+    const item = { id: uid(), op, col, docId, data, ts: Date.now() };
+    await IDB.put('sync_queue', item);
+    SyncQueue._notifyPending();
+  },
+
+  async drain(){
+    if(SyncQueue._draining || !DB._db || !DB._uid) return;
+    const items = await IDB.getAll('sync_queue');
+    if(!items.length) return;
+
+    SyncQueue._draining = true;
+    SyncQueue._setSyncing(true);
+
+    for(const item of items.sort((a,b)=>a.ts-b.ts)){
+      try{
+        const ref = DB._db.ref(`users/${DB._uid}/${item.col}/${item.docId}`);
+        if(item.op==='set')    await ref.set(item.data);
+        if(item.op==='update') await ref.update(item.data);
+        if(item.op==='remove') await ref.remove();
+        await IDB.del('sync_queue', item.id);
+      }catch(e){
+        console.warn('[EVOLV] Sync queue erro:', e);
+        break; // Para na primeira falha e tenta de novo depois
+      }
+    }
+
+    SyncQueue._draining = false;
+    const remaining = await IDB.getAll('sync_queue');
+    SyncQueue._setSyncing(false);
+    if(remaining.length) SyncQueue._notifyPending();
+    else App.updateDot();
+  },
+
+  async count(){
+    const items = await IDB.getAll('sync_queue');
+    return items.length;
+  },
+
+  _setSyncing(v){
+    DB._syncing = v;
+    App.updateDot();
+  },
+
+  _notifyPending(){
+    App.updateDot();
+  },
+};
+
+
 
 // ─── [SEC-1] HELPER DE ESCAPE HTML ───────────────────────────────
 // Usado em TODOS os lugares onde dados do usuário são inseridos no DOM.
@@ -149,9 +322,12 @@ const NOTIF_CONFIG = {
 const DB = {
   cache:{fichas:[],sessoes:[],pesos:[],prefs:{}},
   ready:false, _local:false, _db:null, _uid:null,
-  _loadCount:0, _resolveReady:null, _online:true,
+  _loadCount:0, _resolveReady:null, _online:true, _syncing:false,
 
   async init(){
+    // Migra dados antigos do localStorage para IDB (roda uma vez)
+    await IDB.migrateFromLocalStorage();
+
     let cfg = FIREBASE_CONFIG;
 
     if(!cfg.apiKey){
@@ -166,7 +342,7 @@ const DB = {
 
     if(localStorage.getItem('evolv_offline')==='1'){
       console.info('[EVOLV] Modo offline ativo.');
-      DB._fallback();
+      await DB._fallback();
       return;
     }
 
@@ -187,23 +363,33 @@ const DB = {
       console.info('[EVOLV] Firebase conectado. SyncID:', DB._uid);
 
       DB._listen('fichas'); DB._listen('sessoes'); DB._listen('pesos'); DB._listenPrefs();
-
-      // Migra prefs antigas do localStorage para Firebase (roda só uma vez)
       DB._migratePrefs();
 
-      window.addEventListener('online',  ()=>{ DB._online=true;  App.updateDot(); });
-      window.addEventListener('offline', ()=>{ DB._online=false; App.updateDot(); });
+      // Monitora conectividade — ao reconectar, drena a fila pendente
+      window.addEventListener('online', async ()=>{
+        DB._online = true;
+        App.updateDot();
+        await SyncQueue.drain();
+      });
+      window.addEventListener('offline', ()=>{
+        DB._online = false;
+        App.updateDot();
+        App.toast('Sem conexão — dados salvos localmente');
+      });
       DB._online = navigator.onLine;
 
-    } catch(e){
+      // Drena fila pendente imediatamente se houver items do boot offline
+      if(DB._online) await SyncQueue.drain();
+
+    }catch(e){
       console.error('[EVOLV] Firebase falhou:', e.code || e.message);
-      DB._fallback();
+      await DB._fallback();
       const msg = e.code === 'auth/network-request-failed'
-        ? 'Sem conexão com internet'
+        ? 'Sem conexão — dados salvos localmente'
         : e.message?.includes('databaseURL') || e.code === 'app/invalid-credential'
           ? 'Config Firebase inválida — verifique databaseURL'
-          : 'Firebase indisponível';
-      setTimeout(()=>App && App.toast && App.toast(`⚠️ ${msg} — dados salvos localmente`), 1200);
+          : 'Firebase indisponível — dados salvos localmente';
+      setTimeout(()=>App && App.toast && App.toast(`⚠️ ${msg}`), 1200);
     }
   },
 
@@ -213,80 +399,115 @@ const DB = {
     DB._col(name).on('value', snap=>{
       const data = snap.val() || {};
       DB.cache[name] = Object.keys(data).map(id=>({id,...data[id]}));
-      if(name==='pesos') DB.cache.pesos.sort((a,b)=>a.date.localeCompare(b.date));
+      if(name==='pesos')   DB.cache.pesos.sort((a,b)=>a.date.localeCompare(b.date));
       if(name==='sessoes') DB.cache.sessoes.sort((a,b)=>a.date.localeCompare(b.date));
-      if(name==='fichas') DB.cache.fichas.sort((a,b)=>(a.at||0)-(b.at||0));
+      if(name==='fichas')  DB.cache.fichas.sort((a,b)=>(a.at||0)-(b.at||0));
+      // Espelha no IDB para acesso offline
+      IDB.setAll(name, DB.cache[name]).catch(()=>{});
       DB._loadCount++;
       if(DB._loadCount >= 4 && !DB.ready){ DB.ready=true; DB._resolveReady(); }
       else if(DB.ready){ App.renderPage(S.page); }
     }, err=>{ DB._loadCount++; if(DB._loadCount>=4 && !DB.ready){DB.ready=true; DB._resolveReady();} });
   },
 
-  _fallback(){
-    DB._local=true;
-    const g=(k)=>{try{return JSON.parse(localStorage.getItem('ev_'+k))||[]}catch{return[]}};
-    const gObj=(k)=>{try{return JSON.parse(localStorage.getItem('ev_'+k))||{}}catch{return{}}};
-    // Fallback de prefs: lê do localStorage legado também
-    const prefsLocal = gObj('prefs');
-    if(!prefsLocal.weekTarget){
-      const wt=localStorage.getItem('evolv_week_target');
-      if(wt) prefsLocal.weekTarget=+wt;
+  // Fallback: carrega do IDB (dados espelhados da última sessão online)
+  async _fallback(){
+    DB._local = true;
+    try{
+      const [fichas, sessoes, pesos] = await Promise.all([
+        IDB.getAll('fichas'),
+        IDB.getAll('sessoes'),
+        IDB.getAll('pesos'),
+      ]);
+      // Carrega prefs do IDB
+      const prefKeys = ['weekTarget','pesoGoal','restTime','theme','onboarded','displayName'];
+      const prefsArr = await Promise.all(prefKeys.map(async k=>({ k, v: await IDB.getPref(k) })));
+      const prefs = {};
+      prefsArr.forEach(({k,v})=>{ if(v!==undefined) prefs[k]=v; });
+      // Fallback para localStorage legado se IDB estiver vazio
+      if(!Object.keys(prefs).length){
+        try{
+          const legacy = JSON.parse(localStorage.getItem('ev_prefs')||'{}');
+          Object.assign(prefs, legacy);
+        }catch{}
+      }
+      DB.cache = { fichas, sessoes, pesos: pesos.sort((a,b)=>a.date.localeCompare(b.date)), prefs };
+    }catch(e){
+      console.warn('[EVOLV] IDB fallback falhou, usando localStorage:', e);
+      const g = k=>{ try{ return JSON.parse(localStorage.getItem('ev_'+k))||[]; }catch{ return []; } };
+      const prefsLocal = (() => { try{ return JSON.parse(localStorage.getItem('ev_prefs'))||{}; }catch{ return {}; } })();
+      DB.cache = { fichas:g('fichas'), sessoes:g('sessoes'), pesos:g('pesos'), prefs:prefsLocal };
     }
-    if(!prefsLocal.pesoGoal){
-      const pg=localStorage.getItem('evolv_peso_goal');
-      if(pg) prefsLocal.pesoGoal=+pg;
-    }
-    DB.cache={fichas:g('fichas'),sessoes:g('sessoes'),pesos:g('pesos'),prefs:prefsLocal};
-    DB.ready=true; DB._resolveReady();
+    DB.ready = true;
+    DB._resolveReady();
   },
 
-  _lsave(k){ if(DB._local) localStorage.setItem('ev_'+k, JSON.stringify(DB.cache[k])); },
+  // Escreve para Firebase OU enfileira se offline
+  async _write(op, col, docId, data=null){
+    if(!DB._local && DB._online && DB._db){
+      try{
+        const ref = DB._col(col).child(docId);
+        if(op==='set')    await ref.set(data);
+        if(op==='update') await ref.update(data);
+        if(op==='remove') await ref.remove();
+        return;
+      }catch(e){
+        console.warn('[EVOLV] Write falhou, enfileirando:', e);
+      }
+    }
+    // Offline ou Firebase indisponível: enfileira
+    if(!DB._local) await SyncQueue.push(op, col, docId, data);
+  },
 
   fichas:()=>DB.cache.fichas,
   sessoes:()=>DB.cache.sessoes,
   pesos:()=>DB.cache.pesos,
 
   async addFicha(d){
-    if(DB._local){DB.cache.fichas.push(d);DB._lsave('fichas');App.renderFichas();return;}
-    await DB._col('fichas').child(d.id).set(d);
+    DB.cache.fichas.push(d);
+    await IDB.put('fichas', d);
+    if(DB._local){ return; }
+    await DB._write('set','fichas',d.id,d);
   },
   async updFicha(id,d){
-    if(DB._local){const i=DB.cache.fichas.findIndex(f=>f.id===id);if(i>=0)DB.cache.fichas[i]={...DB.cache.fichas[i],...d};DB._lsave('fichas');App.renderFichas();return;}
-    await DB._col('fichas').child(id).update(d);
+    const i = DB.cache.fichas.findIndex(f=>f.id===id);
+    if(i>=0){ DB.cache.fichas[i]={...DB.cache.fichas[i],...d}; await IDB.put('fichas', DB.cache.fichas[i]); }
+    if(DB._local){ return; }
+    await DB._write('update','fichas',id,d);
   },
   async delFicha(id){
-    if(DB._local){DB.cache.fichas=DB.cache.fichas.filter(f=>f.id!==id);DB._lsave('fichas');App.renderFichas();return;}
-    await DB._col('fichas').child(id).remove();
+    DB.cache.fichas = DB.cache.fichas.filter(f=>f.id!==id);
+    await IDB.del('fichas', id);
+    if(DB._local){ return; }
+    await DB._write('remove','fichas',id);
   },
   async addSessao(d){
-    if(DB._local){DB.cache.sessoes.push(d);DB._lsave('sessoes');return;}
-    await DB._col('sessoes').child(d.id).set(d);
+    DB.cache.sessoes.push(d);
+    await IDB.put('sessoes', d);
+    if(DB._local){ return; }
+    await DB._write('set','sessoes',d.id,d);
   },
   async delSessao(id){
-    if(DB._local){DB.cache.sessoes=DB.cache.sessoes.filter(s=>s.id!==id);DB._lsave('sessoes');App.renderStats();return;}
-    await DB._col('sessoes').child(id).remove();
+    DB.cache.sessoes = DB.cache.sessoes.filter(s=>s.id!==id);
+    await IDB.del('sessoes', id);
+    if(DB._local){ return; }
+    await DB._write('remove','sessoes',id);
   },
   async addPeso(d){
-    if(DB._local){DB.cache.pesos.push(d);DB.cache.pesos.sort((a,b)=>a.date.localeCompare(b.date));DB._lsave('pesos');App.renderPeso();return;}
-    await DB._col('pesos').child(d.id).set(d);
+    DB.cache.pesos.push(d);
+    DB.cache.pesos.sort((a,b)=>a.date.localeCompare(b.date));
+    await IDB.put('pesos', d);
+    if(DB._local){ return; }
+    await DB._write('set','pesos',d.id,d);
   },
   async delPeso(id){
-    if(DB._local){DB.cache.pesos=DB.cache.pesos.filter(p=>p.id!==id);DB._lsave('pesos');App.renderPeso();return;}
-    await DB._col('pesos').child(id).remove();
+    DB.cache.pesos = DB.cache.pesos.filter(p=>p.id!==id);
+    await IDB.del('pesos', id);
+    if(DB._local){ return; }
+    await DB._write('remove','pesos',id);
   },
 
   // ─── PREFS ───────────────────────────────────────────────────
-  // Preferências do usuário (ex: meta semanal, meta de peso).
-  // Armazenadas em users/$uid/prefs — um único objeto flat.
-  // No modo offline usa localStorage como fallback.
-  // getPrefs() é síncrono pois o cache é populado no _listenPrefs.
-  // setPrefs(patch) faz merge — só sobrescreve as chaves enviadas.
-  //
-  // Estrutura: { weekTarget: 5, pesoGoal: 75, ... }
-  //
-  // MIGRAÇÃO: se houver valores em localStorage (versão anterior),
-  // eles são movidos para o Firebase automaticamente na primeira vez.
-
   getPrefs(){ return DB.cache.prefs||{}; },
 
   getPref(key, defaultVal){
@@ -295,45 +516,36 @@ const DB = {
   },
 
   async setPref(key, value){
-    const patch = {[key]: value};
-    DB.cache.prefs = {...(DB.cache.prefs||{}), ...patch};
-    if(DB._local){
-      localStorage.setItem('ev_prefs', JSON.stringify(DB.cache.prefs));
-      return;
-    }
-    await DB._col('prefs').update(patch);
+    DB.cache.prefs = {...(DB.cache.prefs||{}), [key]:value};
+    await IDB.setPref(key, value);
+    if(DB._local){ return; }
+    await DB._write('update','prefs','prefs',{[key]:value});
   },
 
   _listenPrefs(){
     DB._col('prefs').on('value', snap=>{
       DB.cache.prefs = snap.val() || {};
+      // Espelha prefs no IDB
+      Object.entries(DB.cache.prefs).forEach(([k,v])=>IDB.setPref(k,v).catch(()=>{}));
       DB._loadCount++;
       if(DB._loadCount >= 4 && !DB.ready){ DB.ready=true; DB._resolveReady(); }
       else if(DB.ready){ App.renderPage(S.page); }
     }, ()=>{ DB._loadCount++; if(DB._loadCount>=4 && !DB.ready){DB.ready=true; DB._resolveReady();} });
   },
 
-  // Migra prefs antigas do localStorage para o Firebase (roda uma vez)
   async _migratePrefs(){
     if(DB._local) return;
     const migrated = localStorage.getItem('ev_prefs_migrated');
     if(migrated) return;
-
     const patch = {};
-
-    // Meta semanal (chave antiga)
     const wt = localStorage.getItem('evolv_week_target');
     if(wt) patch.weekTarget = +wt;
-
-    // Meta de peso (chave antiga)
     const pg = localStorage.getItem('evolv_peso_goal');
     if(pg) patch.pesoGoal = +pg;
-
     if(Object.keys(patch).length){
       await DB._col('prefs').update(patch);
       console.info('[EVOLV] Prefs migradas para Firebase:', patch);
     }
-
     localStorage.setItem('ev_prefs_migrated', '1');
   },
 };
@@ -2749,7 +2961,30 @@ boot(){
         flex-shrink: 0;
       }
 
-      /* ── Números tabulares — mais legíveis ── */
+      /* ── Status dot — 3 estados ── */
+      .status-dot { transition: background .3s, box-shadow .3s; }
+      .status-dot.off {
+        background: var(--red) !important;
+        box-shadow: 0 0 0 0 transparent !important;
+      }
+      .status-dot.pending {
+        background: var(--heat) !important;
+        box-shadow: 0 0 6px var(--heat) !important;
+        animation: dot-pulse 1.8s ease-in-out infinite;
+      }
+      .status-dot.syncing {
+        background: var(--cool) !important;
+        box-shadow: 0 0 6px var(--cool) !important;
+        animation: dot-spin 1s linear infinite;
+      }
+      @keyframes dot-pulse {
+        0%,100%{ opacity:1; } 50%{ opacity:.45; }
+      }
+      @keyframes dot-spin {
+        0%{ box-shadow: 0 0 6px var(--cool); }
+        50%{ box-shadow: 0 0 12px var(--cool); }
+        100%{ box-shadow: 0 0 6px var(--cool); }
+      }
       .sv, .num, .h1, #tdisplay {
         font-variant-numeric: tabular-nums !important;
         font-weight: 800 !important;
@@ -2760,18 +2995,71 @@ boot(){
 },
 
 updateDot(){
-  const dot=$('status-dot');if(!dot)return;
-  const on=DB._local?false:(DB._online!==false);
-  dot.classList.toggle('off',!on);
-  if(DB._local){
-    dot.title='Modo offline — clique para reconectar';
-    dot.style.cursor='pointer';
-    dot.onclick=()=>App.showReconnectModal();
-  } else {
-    dot.title=on?'Firebase OK — clique para sync':'Sem conexão';
-    dot.style.cursor=on?'pointer':'default';
-    dot.onclick=on?()=>App.showSyncModal():null;
+  const dot=$('status-dot'); if(!dot) return;
+
+  // Limpa classes anteriores
+  dot.className = 'status-dot';
+
+  if(DB._syncing){
+    // Sincronizando fila pendente
+    dot.classList.add('syncing');
+    dot.title = 'Sincronizando dados pendentes…';
+    dot.style.cursor = 'default';
+    dot.onclick = null;
+    return;
   }
+
+  // Verifica itens pendentes na fila (async, atualiza depois)
+  SyncQueue.count().then(pending=>{
+    if(pending>0){
+      dot.classList.add('pending');
+      dot.title = `${pending} operação${pending>1?'s':''} pendente${pending>1?'s':''} — aguardando conexão`;
+      dot.style.cursor = 'pointer';
+      dot.onclick = ()=>App.showSyncStatusModal();
+    } else if(DB._local){
+      dot.classList.add('off');
+      dot.title = 'Modo offline — clique para reconectar';
+      dot.style.cursor = 'pointer';
+      dot.onclick = ()=>App.showReconnectModal();
+    } else if(!DB._online){
+      dot.classList.add('off');
+      dot.title = 'Sem conexão — dados salvos localmente';
+      dot.style.cursor = 'default';
+      dot.onclick = null;
+    } else {
+      // Online e sincronizado
+      dot.title = 'Sincronizado — clique para detalhes';
+      dot.style.cursor = 'pointer';
+      dot.onclick = ()=>App.showSyncModal();
+    }
+  });
+},
+
+// Modal de status de sync — mostra itens pendentes
+async showSyncStatusModal(){
+  const items = await IDB.getAll('sync_queue');
+  const m = document.createElement('div'); m.className='mo';
+  m.innerHTML=`<div class="md">
+    <div class="mhandle"></div>
+    <div class="mtitle">Dados pendentes de sync</div>
+    <div style="font-size:13px;color:var(--t2);margin:-10px 0 16px;line-height:1.5">
+      ${items.length} operação${items.length!==1?'es':''} aguardando conexão com internet.
+      Seus dados estão seguros no dispositivo.
+    </div>
+    <div style="background:var(--bg-3);border-radius:12px;padding:12px 14px;margin-bottom:16px">
+      ${items.slice(0,8).map(it=>`
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);font-size:12px;color:var(--t1)">
+          <span style="font-family:var(--mono);font-size:10px;color:var(--t2);flex-shrink:0">${it.op.toUpperCase()}</span>
+          <span style="flex:1">${it.col} / ${it.docId.slice(0,8)}…</span>
+          <span style="color:var(--t3);font-size:10px">${new Date(it.ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
+        </div>
+      `).join('')}
+      ${items.length>8?`<div style="font-size:11px;color:var(--t2);padding-top:6px">+${items.length-8} mais…</div>`:''}
+    </div>
+    <button class="btn bp lg" onclick="App.closeModal()">Fechar</button>
+  </div>`;
+  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
+  $('mroot').appendChild(m);
 },
 
 // ═══════════════════════════════════════════════════════════════
