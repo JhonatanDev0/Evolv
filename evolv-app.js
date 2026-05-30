@@ -364,8 +364,17 @@ renderHome(){
   const sess=DB.sessoes(), pesos=DB.pesos(), fichas=DB.fichas(), now=new Date();
 
   const wk = sess.filter(s=>(now-new Date(s.date))/864e5<=7);
-  const mo = sess.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
-  const vol = mo.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
+
+  // Carga média por série (últimos 7 dias) — mais legível que volume total
+  const wkSeries = wk.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).length,0),0);
+  const wkVol    = wk.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
+  const avgLoad  = wkSeries > 0 ? Math.round(wkVol / wkSeries) : 0;
+
+  // Duração média de treino (todas as sessões com dur > 0)
+  const sessWithDur = sess.filter(s=>s.dur>0);
+  const avgDur = sessWithDur.length
+    ? Math.round(sessWithDur.reduce((a,s)=>a+s.dur,0)/sessWithDur.length/60)
+    : 0;
 
   const sessDays = new Set(sess.map(s=>s.date.slice(0,10)));
   let streak = 0;
@@ -377,7 +386,6 @@ renderHome(){
   }
 
   const suggestedFicha = fichas[0];
-  // [SEC-1] esc() em nomes de fichas e dias
   const heroTitle = suggestedFicha
     ? `Pronto para <em>${esc((suggestedFicha.days?.[0]?.name || suggestedFicha.name).slice(0,28))}</em>?`
     : `Sua evolução <em>começa aqui.</em>`;
@@ -390,11 +398,10 @@ renderHome(){
     ? recent.map((s,i)=>{
         const f=fichas.find(f=>f.id===s.fichaId);
         const d=f?.days?.[s.dayIdx];
-        const v=(s.exs||[]).reduce((a,e)=>a+(e.sets||[]).filter(x=>x.done).reduce((b,x)=>b+(+x.reps||0)*(+x.w||0),0),0);
         const sets=(s.exs||[]).reduce((a,e)=>a+(e.sets||[]).filter(x=>x.done).length,0);
         const tag=String.fromCharCode(65+i);
         const color=S.fichaColors[i%S.fichaColors.length];
-        // [SEC-1] esc() em nomes vindos do banco
+        const durMin=Math.round((s.dur||0)/60);
         return `<div class="wi">
           <div class="wi-ico" style="background:color-mix(in oklab, ${color} 14%, transparent);color:${color};border-color:color-mix(in oklab, ${color} 32%, transparent)">${tag}</div>
           <div class="wi-info">
@@ -403,7 +410,7 @@ renderHome(){
           </div>
           <div class="wi-right">
             <div class="num">${ft(s.dur||0)}</div>
-            <div class="meta">${v?(v>=1000?(v/1000).toFixed(1)+'t':v+'kg'):'—'}</div>
+            <div class="meta">${durMin>0?durMin+'min':'—'}</div>
           </div>
         </div>`;
       }).join('')
@@ -418,10 +425,10 @@ renderHome(){
   const weekDots = Array.from({length:7}).map((_,i)=>{
     const d=new Date(now); d.setDate(now.getDate()-(6-i));
     const k=d.toISOString().slice(0,10);
-    const done = sessDays.has(k); const today = i===6; const dow = d.getDay();
+    const done = sessDays.has(k); const isToday = i===6; const dow = d.getDay();
     return `<div class="wk-day">
       <div class="wd">${dayLabels[dow]}</div>
-      <div class="wdot ${done?'done':''} ${today&&!done?'today':''}">${done?IC.check(14):''}</div>
+      <div class="wdot ${done?'done':''} ${isToday&&!done?'today':''}">${done?IC.check(14):''}</div>
     </div>`;
   }).join('');
 
@@ -435,9 +442,21 @@ renderHome(){
       </button>
     </div>
     <div class="srow">
-      <div class="sc"><div class="sl">Semana</div><div class="sv">${wk.length}<small>/${weekTarget}</small></div><div class="ss">treinos</div></div>
-      <div class="sc"><div class="sl" style="color:var(--heat)">Volume</div><div class="sv">${vol>=1000?(vol/1000).toFixed(1):vol}<small>${vol>=1000?'t':'kg'}</small></div><div class="ss">este mês</div></div>
-      <div class="sc"><div class="sl" style="color:var(--cool)">Streak</div><div class="sv">${streak}<small>d</small></div><div class="ss">${streak>0?'ativo':'—'}</div></div>
+      <div class="sc">
+        <div class="sl">Semana</div>
+        <div class="sv">${wk.length}<small>/${weekTarget}</small></div>
+        <div class="ss">treinos</div>
+      </div>
+      <div class="sc">
+        <div class="sl" style="color:var(--heat)">Carga média</div>
+        <div class="sv">${avgLoad}<small>kg</small></div>
+        <div class="ss">${wk.length?'por série':'sem dados'}</div>
+      </div>
+      <div class="sc">
+        <div class="sl" style="color:var(--cool)">Streak</div>
+        <div class="sv">${streak}<small>d</small></div>
+        <div class="ss">${streak>0?'ativo':'—'}</div>
+      </div>
     </div>
     <div class="card">
       <div class="between" style="margin-bottom:12px">
@@ -744,91 +763,208 @@ resetSeries(){
 
 // ─── STATS ───────────────────────────────────────────────────────
 renderStats(){
-  const sess=DB.sessoes(),pesos=DB.pesos();
+  const sess=DB.sessoes(), pesos=DB.pesos();
   const root=$('stats-content');
   if(!sess.length&&!pesos.length){
     root.innerHTML=`<div class="empty"><div class="empty-ico">${IC.trendUp(28)}</div><div class="et">Sem dados ainda</div><div class="es">Registre treinos e pesagens<br>para ver suas estatísticas.</div></div>`;
     return;
   }
   const now=new Date();
-  const total=sess.length;
-  const vol=sess.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
-  const series=sess.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).length,0),0);
-  const weeks=[],weekLabels=[];
-  for(let i=11;i>=0;i--){
-    const start=new Date(now); start.setDate(now.getDate()-(i*7+6));
-    const end=new Date(now); end.setDate(now.getDate()-(i*7));
-    const v=sess.filter(s=>{const d=new Date(s.date);return d>=start&&d<=end;})
-      .reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
-    weeks.push(v); weekLabels.push(i===0?'agora':`-${i}s`);
-  }
-  const maxW=Math.max(...weeks,1), avgW=(weeks.reduce((a,b)=>a+b,0)/weeks.length)||0;
-  const lastW=weeks[weeks.length-1], prevW=weeks[weeks.length-2]||0;
-  const wDelta=prevW?((lastW-prevW)/prevW)*100:0;
-  const byEx={};
-  sess.forEach(s=>{(s.exs||[]).forEach(e=>{
-    const v=(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0);
-    if(!e.name) return; byEx[e.name]=(byEx[e.name]||0)+v;
-  });});
-  const topEx=Object.entries(byEx).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const topMax=topEx[0]?.[1]||1;
 
+  // ── Frequência ────────────────────────────────────────────────
+  const total = sess.length;
+  const sessDays = new Set(sess.map(s=>s.date.slice(0,10)));
+
+  // Treinos últimos 30 dias
+  const mo30 = sess.filter(s=>(now-new Date(s.date))/864e5<=30);
+
+  // Consistência %: dias treinados / 30
+  const consistency = Math.round((new Set(mo30.map(s=>s.date.slice(0,10))).size / 30) * 100);
+
+  // Frequência semanal média (últimas 8 semanas)
+  const weekCounts = [];
+  for(let i=7;i>=0;i--){
+    const start=new Date(now); start.setDate(now.getDate()-(i*7+6));
+    const end=new Date(now);   end.setDate(now.getDate()-(i*7));
+    weekCounts.push(sess.filter(s=>{const d=new Date(s.date);return d>=start&&d<=end;}).length);
+  }
+  const avgFreq = (weekCounts.reduce((a,b)=>a+b,0)/weekCounts.length).toFixed(1);
+  const lastWCount = weekCounts[weekCounts.length-1];
+  const prevWCount = weekCounts[weekCounts.length-2]||0;
+
+  // ── Duração ───────────────────────────────────────────────────
+  const sessWithDur = sess.filter(s=>s.dur>0);
+  const avgDurSec   = sessWithDur.length
+    ? Math.round(sessWithDur.reduce((a,s)=>a+s.dur,0)/sessWithDur.length)
+    : 0;
+  const avgDurMin   = Math.round(avgDurSec/60);
+
+  // Duração total acumulada em horas
+  const totalHours  = (sess.reduce((a,s)=>a+(s.dur||0),0)/3600).toFixed(1);
+
+  // ── Carga média por série ────────────────────────────────────
+  const allSeries   = sess.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).length,0),0);
+  const allVol      = sess.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
+  const avgLoad     = allSeries>0 ? Math.round(allVol/allSeries) : 0;
+
+  // Carga média últimas 4 semanas vs 4 semanas anteriores (progressão)
+  const recent4w  = sess.filter(s=>(now-new Date(s.date))/864e5<=28);
+  const prev4w    = sess.filter(s=>{const d=(now-new Date(s.date))/864e5; return d>28&&d<=56;});
+  const loadOf = arr=>{
+    const s=arr.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).length,0),0);
+    const v=arr.reduce((a,s)=>a+(s.exs||[]).reduce((b,e)=>b+(e.sets||[]).filter(x=>x.done).reduce((c,x)=>c+(+x.reps||0)*(+x.w||0),0),0),0);
+    return s>0?Math.round(v/s):0;
+  };
+  const loadRecent = loadOf(recent4w);
+  const loadPrev   = loadOf(prev4w);
+  const loadDelta  = loadPrev>0 ? Math.round(((loadRecent-loadPrev)/loadPrev)*100) : 0;
+
+  // ── PR por exercício ─────────────────────────────────────────
+  const prMap={};
+  sess.forEach(s=>(s.exs||[]).forEach(e=>{
+    if(!e.name) return;
+    (e.sets||[]).filter(x=>x.done&&+x.w>0).forEach(x=>{
+      if(!prMap[e.name]||+x.w>prMap[e.name]) prMap[e.name]=+x.w;
+    });
+  }));
+  const prs = Object.entries(prMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  // ── Exercício mais frequente ──────────────────────────────────
+  const freqMap={};
+  sess.forEach(s=>(s.exs||[]).forEach(e=>{
+    if(!e.name) return;
+    freqMap[e.name]=(freqMap[e.name]||0)+1;
+  }));
+  const topFreqEx = Object.entries(freqMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const topFreqMax = topFreqEx[0]?.[1]||1;
+
+  // ── Treinos por semana — barras (8 semanas) ───────────────────
+  const maxWC = Math.max(...weekCounts,1);
+
+  // ── Render ────────────────────────────────────────────────────
   root.innerHTML=`
     <div class="stats-hero">
-      <div class="eyebrow">Estatísticas</div>
+      <div class="eyebrow">Visão geral</div>
       <div class="h1" style="margin-top:4px">
-        ${vol>=1000?(vol/1000).toFixed(1):vol}<small>${vol>=1000?'t volume':'kg volume'}</small>
-        <small style="margin:0 6px">·</small>
         ${total}<small> treinos</small>
+        <small style="margin:0 6px">·</small>
+        ${totalHours}<small>h</small>
       </div>
       <div class="meta" style="margin-top:4px">
-        ${total?`${series} séries · ${wDelta>=0?'+':''}${wDelta.toFixed(0)}% vs semana anterior`:'sem dados de treino'}
+        ${allSeries} séries · ${avgDurMin>0?`média de ${avgDurMin} min por treino`:'sem dados de duração'}
       </div>
     </div>
+
+    <!-- FREQUÊNCIA -->
+    <div class="eyebrow" style="margin:4px 0 10px">Frequência</div>
     <div class="srow">
-      <div class="sc"><div class="sl">Treinos</div><div class="sv">${total}</div><div class="ss">total</div></div>
-      <div class="sc"><div class="sl" style="color:var(--heat)">Volume</div><div class="sv">${vol>=1000?(vol/1000).toFixed(1):vol}<small>${vol>=1000?'t':'kg'}</small></div><div class="ss">total</div></div>
-      <div class="sc"><div class="sl" style="color:var(--cool)">Séries</div><div class="sv">${series}</div><div class="ss">total</div></div>
+      <div class="sc">
+        <div class="sl">Consistência</div>
+        <div class="sv">${consistency}<small>%</small></div>
+        <div class="ss">últimos 30d</div>
+      </div>
+      <div class="sc">
+        <div class="sl" style="color:var(--green)">Freq. semanal</div>
+        <div class="sv">${avgFreq}<small>x</small></div>
+        <div class="ss">média 8 sem.</div>
+      </div>
+      <div class="sc">
+        <div class="sl" style="color:var(--cool)">Esta semana</div>
+        <div class="sv">${lastWCount}</div>
+        <div class="ss">${lastWCount>=prevWCount?'↑':'↓'} vs anterior</div>
+      </div>
     </div>
+
+    <!-- BARRAS DE FREQUÊNCIA SEMANAL -->
     <div class="card">
       <div class="between" style="margin-bottom:12px">
         <div>
-          <div class="eyebrow">Volume por semana</div>
+          <div class="eyebrow">Treinos por semana</div>
           <div class="row" style="gap:6px;margin-top:4px;align-items:baseline">
-            <div class="num" style="font-size:20px">${avgW>=1000?(avgW/1000).toFixed(1)+'t':Math.round(avgW)+'kg'}</div>
+            <div class="num" style="font-size:20px">${avgFreq}</div>
             <div class="meta">média</div>
           </div>
         </div>
-        ${wDelta>=0
-          ?`<div class="row" style="gap:4px;color:var(--green)">${IC.trendUp(14)}<span class="num" style="font-size:13px">+${wDelta.toFixed(0)}%</span></div>`
-          :`<div class="row" style="gap:4px;color:var(--heat)">${IC.trendDown(14)}<span class="num" style="font-size:13px">${wDelta.toFixed(0)}%</span></div>`}
+        ${lastWCount>=prevWCount
+          ?`<div class="row" style="gap:4px;color:var(--green)">${IC.trendUp(14)}<span class="num" style="font-size:13px">${lastWCount} esta sem.</span></div>`
+          :`<div class="row" style="gap:4px;color:var(--heat)">${IC.trendDown(14)}<span class="num" style="font-size:13px">${lastWCount} esta sem.</span></div>`}
       </div>
       <div class="bar-chart">
-        ${weeks.map((v,i)=>{
-          const h=(v/maxW)*100, cur=i===weeks.length-1;
+        ${weekCounts.map((v,i)=>{
+          const h=(v/maxWC)*100, cur=i===weekCounts.length-1;
           return `<div class="bar-col ${cur?'cur':''}">
-            <div class="bar" style="height:${h}%;min-height:${v?4:2}px"></div>
-            <div class="blabel">${i===0?'-11':i===weeks.length-1?'agora':''}</div>
+            <div class="bar" style="height:${Math.max(h,v?8:2)}%;"></div>
+            <div class="blabel">${i===0?'-7w':i===weekCounts.length-1?'agora':''}</div>
           </div>`;
         }).join('')}
       </div>
     </div>
+
+    <!-- CARGA E DURAÇÃO -->
+    <div class="eyebrow" style="margin:18px 0 10px">Desempenho</div>
+    <div class="srow">
+      <div class="sc">
+        <div class="sl" style="color:var(--heat)">Carga média</div>
+        <div class="sv">${avgLoad}<small>kg</small></div>
+        <div class="ss">por série</div>
+      </div>
+      <div class="sc">
+        <div class="sl" style="color:var(--violet)">Progresso</div>
+        <div class="sv" style="color:${loadDelta>=0?'var(--green)':'var(--heat)'}">${loadDelta>=0?'+':''}${loadDelta}<small>%</small></div>
+        <div class="ss">carga 4s vs 4s</div>
+      </div>
+      <div class="sc">
+        <div class="sl" style="color:var(--cool)">Duração</div>
+        <div class="sv">${avgDurMin>0?avgDurMin:'—'}<small>${avgDurMin>0?'min':''}</small></div>
+        <div class="ss">média por treino</div>
+      </div>
+    </div>
+
+    <!-- PRs -->
+    ${prs.length?`
+    <div class="eyebrow" style="margin:18px 0 10px">Personal records · maior carga</div>
+    <div class="card" style="padding:8px 16px">
+      ${prs.map(([n,w],i)=>{
+        const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':'';
+        return `<div class="prow" style="border-bottom:${i<prs.length-1?'1px solid var(--line)':'none'}">
+          <div class="pday" style="width:24px;flex-shrink:0">
+            <div style="font-size:14px">${medal||`<span style="font-family:var(--mono);font-size:11px;color:var(--t2)">${i+1}</span>`}</div>
+          </div>
+          <div class="pdata" style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;color:var(--t0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(n)}</div>
+          </div>
+          <div style="font-family:var(--mono);font-weight:700;font-size:16px;color:var(--t0);flex-shrink:0">
+            ${w}<small style="font-size:11px;color:var(--t2);font-weight:500;margin-left:2px">kg</small>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`:''}
+
+    <!-- EXERCÍCIOS MAIS FREQUENTES -->
+    ${topFreqEx.length?`
+    <div class="eyebrow" style="margin:18px 0 10px">Exercícios · mais praticados</div>
+    <div>
+      ${topFreqEx.map(([n,c])=>{
+        const pct=(c/topFreqMax)*100;
+        return `<div class="lb-row">
+          <div class="lb-head">
+            <div class="lb-name">${esc(n)}</div>
+            <div class="lb-val">${c}x</div>
+          </div>
+          <div class="lb-bar"><div class="lb-fill" style="width:${pct}%"></div></div>
+        </div>`;
+      }).join('')}
+    </div>`:''}
+
+    <!-- EVOLUÇÃO DO PESO -->
     ${pesos.length>=2?`
+    <div class="eyebrow" style="margin:18px 0 10px">Evolução do peso</div>
     <div class="card">
-      <div class="eyebrow">Evolução do peso</div>
-      <div class="row" style="gap:6px;margin-top:6px;align-items:baseline">
+      <div class="row" style="gap:6px;align-items:baseline">
         <div class="num" style="font-size:22px">${pesos[pesos.length-1].w}<small style="font-size:13px;color:var(--t2);font-weight:500;margin-left:2px">kg</small></div>
-        ${(()=>{const first=pesos[0].w,last=pesos[pesos.length-1].w,diff=(last-first).toFixed(1);const cls=diff>0?'color:var(--heat)':'color:var(--cool)';return `<div class="meta" style="${cls}">${diff>0?'+':''}${diff}kg · ${pesos.length} pesagens</div>`;})()}
+        ${(()=>{const first=pesos[0].w,last=pesos[pesos.length-1].w,diff=(last-first).toFixed(1);const cls=+diff>0?'color:var(--heat)':'color:var(--cool)';return `<div class="meta" style="${cls}">${+diff>0?'+':''}${diff}kg desde o início</div>`;})()}
       </div>
       <div class="cwrap" style="margin-top:8px"><canvas id="ch-pe"></canvas></div>
-    </div>`:''}
-    ${topEx.length?`
-    <div class="eyebrow" style="margin:22px 0 10px">Exercícios · top volume</div>
-    <div>
-      ${topEx.map(([n,v])=>{const pct=(v/topMax)*100;
-        // [SEC-1] esc() no nome do exercício
-        return `<div class="lb-row"><div class="lb-head"><div class="lb-name">${esc(n)}</div><div class="lb-val">${v>=1000?(v/1000).toFixed(1)+'t':v+'kg'}</div></div><div class="lb-bar"><div class="lb-fill" style="width:${pct}%"></div></div></div>`;
-      }).join('')}
     </div>`:''}
   `;
 
