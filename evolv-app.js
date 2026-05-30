@@ -341,7 +341,7 @@ DB.whenReady = new Promise(r=>{DB._resolveReady=r;});
 
 // ─── STATE ───────────────────────────────────────────────────────
 const S = {
-  page:'home', timerTab:0, series:0,
+  page:'home', series:0,
   timer:{total:90,rem:90,running:false,iv:null},
   workout:{on:false,minimized:false,fichaId:null,dayIdx:null,t0:null,iv:null,exs:[]},
   charts:{},
@@ -728,13 +728,6 @@ renderTimerTicks(){
     line.setAttribute('stroke-linecap','round');
     g.appendChild(line);
   }
-},
-
-showTimerTab(i){
-  S.timerTab=i;
-  document.querySelectorAll('.seg-btn').forEach((b,bi)=>b.classList.toggle('on',bi===i));
-  $('tab-interval').style.display=i===0?'block':'none';
-  $('tab-series').style.display=i===1?'block':'none';
 },
 
 setPreset(s){

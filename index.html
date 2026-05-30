@@ -96,10 +96,6 @@
 
     <!-- TIMER -->
     <section class="page" id="pg-timer">
-      <div class="seg">
-        <button class="seg-btn on" onclick="App.showTimerTab(0)">Intervalo</button>
-        <button class="seg-btn" onclick="App.showTimerTab(1)">Séries</button>
-      </div>
       <div id="tab-interval">
         <div class="card">
           <div class="tring-wrap">
@@ -144,26 +140,6 @@
             <button class="tcbtn rst" onclick="App.bumpTimer(15)" aria-label="+15s">
               <span style="font-family:var(--mono);font-weight:700;font-size:13px">+15</span>
             </button>
-          </div>
-        </div>
-      </div>
-      <div id="tab-series" style="display:none">
-        <div class="card">
-          <div class="eyebrow" style="text-align:center">Séries realizadas</div>
-          <div class="sc-wrap">
-            <div class="sc-num" id="sc-num">0</div>
-            <div class="sc-lbl">séries</div>
-          </div>
-          <div class="sc-btns">
-            <button class="scbtn minus" onclick="App.addSeries(-1)" aria-label="-1">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            </button>
-            <button class="scbtn plus" onclick="App.addSeries(1)" aria-label="+1">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            </button>
-          </div>
-          <div style="margin-top:24px">
-            <button class="btn bg sm" onclick="App.resetSeries()" style="width:100%">Zerar contador</button>
           </div>
         </div>
       </div>
