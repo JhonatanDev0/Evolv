@@ -404,9 +404,26 @@ nav(p){
 renderPage(p){
   if(p==='home') App.renderHome();
   else if(p==='fichas') App.renderFichas();
-  else if(p==='timer') App.renderTimerTicks();
+  else if(p==='timer'){ App.renderTimerTicks(); App._syncRestTimeUI(); }
   else if(p==='stats') App.renderStats();
   else if(p==='peso') App.renderPeso();
+},
+
+// Sincroniza o label e preset da página Timer com a pref restTime
+_syncRestTimeUI(){
+  const t = DB.getPref('restTime', 90);
+  const label = $('rest-time-label');
+  if(label) label.textContent = `Descanso padrão: ${t<60?t+'s':t/60+'min'}`;
+  // Aplica o preset salvo nos botões visuais (sem alterar se timer estiver rodando)
+  if(!S.timer.running){
+    document.querySelectorAll('.tp').forEach(b=>b.classList.remove('on'));
+    [30,45,60,90,120,180].forEach((v,i)=>{
+      if(v===t) document.querySelectorAll('.tp')[i]?.classList.add('on');
+    });
+    if($('cmin')) $('cmin').value=Math.floor(t/60);
+    if($('csec')) $('csec').value=t%60;
+    S.timer.total=t; S.timer.rem=t; App.updTimer();
+  }
 },
 
 // ─── SFX ────────────────────────────────────────────────────────
@@ -1638,16 +1655,52 @@ startWorkout(fichaId,dayIdx){
   App.closeModal();
   App.resetSeries();
   App.resetTimer();
+
+  // ── [HIST-LOAD] Busca última carga usada por exercício ────────
+  // Percorre as sessões de trás para frente e pega a carga mais
+  // recente de cada set de cada exercício pelo nome.
+  // Resultado: { 'Supino Reto': [80, 80, 75], 'Agachamento': [100, 100, 100] }
+  const lastLoads = {};
+  const sessoes = DB.sessoes().slice().reverse(); // mais recente primeiro
+  (d.exs||[]).forEach(ex=>{
+    if(!ex.name || lastLoads[ex.name]) return;
+    for(const s of sessoes){
+      const match = (s.exs||[]).find(e=>e.name===ex.name);
+      if(match){
+        const done = (match.sets||[]).filter(x=>x.done);
+        if(done.length){
+          lastLoads[ex.name] = done.map(x=>+x.w||0);
+          break;
+        }
+      }
+    }
+  });
+
   S.workout={on:true,minimized:false,fichaId,dayIdx,t0:Date.now(),iv:null,
-    exs:(d.exs||[]).map(e=>({name:e.name,ts:e.sets||3,tr:e.reps||12,sets:Array.from({length:e.sets||3},()=>({reps:e.reps||12,w:0,done:false}))}))};
+    exs:(d.exs||[]).map(e=>{
+      const hist = lastLoads[e.name] || [];
+      return {
+        name: e.name,
+        ts:   e.sets||3,
+        tr:   e.reps||12,
+        // Pré-preenche sets com a carga histórica correspondente.
+        // Se havia 3 sets antes e agora há 4, o 4º recebe a última carga.
+        sets: Array.from({length:e.sets||3},(_,si)=>({
+          reps: e.reps||12,
+          w:    hist[si] ?? hist[hist.length-1] ?? 0,
+          done: false,
+        })),
+        // Guarda histórico para exibir badge "última vez"
+        lastLoads: hist,
+      };
+    })};
+
   $('aw').classList.add('open'); $('aw-title').textContent=d.name;
   App.updateWorkoutResume();
-  // [CACHE-WO] Salva estado inicial imediatamente
   WorkoutCache.save();
   S.workout.iv=setInterval(()=>{
     const el=$('aw-timer');
     if(el) el.textContent=ft(Math.floor((Date.now()-S.workout.t0)/1000));
-    // [CACHE-WO] Persiste a cada 10s para não spammar localStorage
     if(Math.floor((Date.now()-S.workout.t0)/1000) % 10 === 0) WorkoutCache.save();
   },1000);
   App.renderAW();
@@ -1726,16 +1779,31 @@ renderAW(forceRebuild=false){
   }
 
   // Rebuild completo (primeira vez ou após addSet)
-  // [SEC-1] esc() em nomes de exercícios
   body.innerHTML=exs.map((ex,ei)=>{
     const allDone=ex.sets.every(s=>s.done);
+    // Badge de última carga — mostra a carga máxima do histórico anterior
+    const hist = ex.lastLoads||[];
+    const histMax = hist.length ? Math.max(...hist) : 0;
+    const histBadge = histMax > 0
+      ? `<span style="
+          font-size:10px;font-family:var(--mono);font-weight:600;
+          color:var(--t2);background:var(--bg-3);border:1px solid var(--line);
+          border-radius:6px;padding:2px 7px;margin-left:8px;
+        ">${histMax}kg última vez</span>`
+      : '';
     return `<div class="ex-card ${allDone?'glow':''}">
-      <div class="ex-hdr"><div class="ex-name">${esc(ex.name)}</div><span class="ex-tag">${ex.sets.filter(s=>s.done).length}/${ex.sets.length}</span></div>
+      <div class="ex-hdr">
+        <div style="flex:1;min-width:0">
+          <div class="ex-name">${esc(ex.name)}</div>
+          ${histBadge}
+        </div>
+        <span class="ex-tag">${ex.sets.filter(s=>s.done).length}/${ex.sets.length}</span>
+      </div>
       <div class="sets-hdr"><span></span><span>Carga (kg)</span><span>Reps</span><span></span></div>
       ${ex.sets.map((s,si)=>`
         <div class="set-row">
           <div class="sn">${si+1}</div>
-          <input type="number" value="${s.w||''}" placeholder="0" min="0" step="0.5" onchange="App.updSet(${ei},${si},'w',this.value)" inputmode="decimal" style="${s.done?'opacity:0.45':''}">
+          <input type="number" value="${s.w||''}" placeholder="${hist[si]??hist[hist.length-1]??0}" min="0" step="0.5" onchange="App.updSet(${ei},${si},'w',this.value)" inputmode="decimal" style="${s.done?'opacity:0.45':''}">
           <input type="number" value="${s.reps||''}" placeholder="${ex.tr}" min="1" onchange="App.updSet(${ei},${si},'reps',this.value)" inputmode="numeric" style="${s.done?'opacity:0.45':''}">
           <div class="set-chk ${s.done?'done':''}" onclick="App.togSet(${ei},${si})">${s.done?IC.check(16):''}</div>
         </div>`).join('')}
@@ -1752,19 +1820,131 @@ updSet(ei,si,f,v){
 
 togSet(ei,si){
   const s=S.workout.exs[ei].sets[si]; s.done=!s.done;
-  // [CACHE-WO] Persiste imediatamente ao marcar/desmarcar série
   WorkoutCache.save();
-  // Atualização cirúrgica — não reconstrói o DOM
   App.renderAW(false);
-  if(s.done){ App.addSeries(1); App.resetTimer(); App.startTimer(); App.toast('Timer iniciado!'); }
+
+  if(s.done){
+    App.addSeries(1);
+
+    // ── [REST] Descanso configurável ──────────────────────────
+    // Se o usuário nunca configurou o tempo de descanso,
+    // pergunta uma vez e salva no Firebase. Depois usa o valor salvo.
+    const restTime = DB.getPref('restTime', null);
+
+    if(restTime === null){
+      // Primeira vez — mostra modal de configuração
+      App.showRestTimeSetup(()=>{
+        const t = DB.getPref('restTime', 90);
+        App.setPreset(t);
+        App.startTimer();
+        App.toast('Timer iniciado!');
+      });
+    } else {
+      App.setPreset(restTime);
+      App.startTimer();
+      App.toast('Timer iniciado!');
+    }
+  }
 },
 
 addSet(ei){
   const e=S.workout.exs[ei]; e.sets.push({reps:e.tr,w:0,done:false});
-  // [CACHE-WO] Persiste ao adicionar série
   WorkoutCache.save();
-  // Rebuild completo pois estrutura mudou
   App.renderAW(true);
+},
+
+// ── [REST] Modal de configuração — primeira vez ───────────────
+// Aparece automaticamente ao marcar a primeira série do histórico.
+// onConfirm é chamado depois de salvar, para iniciar o timer.
+showRestTimeSetup(onConfirm){
+  App.closeModal();
+  const OPTIONS = [30,45,60,90,120,180];
+  const m=document.createElement('div'); m.className='mo';
+  m.innerHTML=`<div class="md">
+    <div class="mhandle"></div>
+    <div class="mtitle">Tempo de descanso padrão</div>
+    <div style="font-size:13px;color:var(--t2);margin:-10px 0 18px;line-height:1.5">
+      Quanto tempo você descansa entre as séries? Pode alterar a qualquer momento na página Timer.
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px">
+      ${OPTIONS.map(s=>`
+        <button onclick="App._saveRestTime(${s}, this._onConfirm)" data-s="${s}" style="
+          height:64px;border-radius:14px;
+          background:var(--bg-3);border:1.5px solid var(--line-2);
+          color:var(--t1);cursor:pointer;transition:all .15s;
+          display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+        ">
+          <span style="font-family:var(--mono);font-weight:700;font-size:18px;color:var(--t0)">${s<60?s+'s':s/60+'min'}</span>
+          <span style="font-size:10px;letter-spacing:.08em;opacity:.55">${s===90?'recomendado':s<=45?'curto':s>=180?'longo':''}</span>
+        </button>
+      `).join('')}
+    </div>
+    <button class="btn bg sm" onclick="App.closeModal()" style="margin-bottom:4px">Pular por agora</button>
+  </div>`;
+  // Injeta o callback nos botões (não pode ir no onclick inline por ser função)
+  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
+  $('mroot').appendChild(m);
+  // Guarda callback para os botões usarem
+  m.querySelectorAll('button[data-s]').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const s=+btn.dataset.s;
+      App._saveRestTime(s, onConfirm);
+    });
+  });
+},
+
+async _saveRestTime(seconds, onConfirm){
+  await DB.setPref('restTime', seconds);
+  App.closeModal();
+  App.renderTimerPage(); // atualiza preset selecionado na página timer
+  if(onConfirm) onConfirm();
+},
+
+// Atualiza a página timer para refletir o preset ativo das prefs
+renderTimerPage(){
+  App._syncRestTimeUI();
+  const label = $('rest-time-label');
+  const t = DB.getPref('restTime', 90);
+  if(label) label.textContent = `Descanso padrão: ${t<60?t+'s':t/60+'min'}`;
+},
+
+// Modal de edição do descanso — acessível pelo botão na página Timer
+showRestTimeModal(){
+  const current = DB.getPref('restTime', 90);
+  const OPTIONS = [30,45,60,90,120,180];
+  App.closeModal();
+  const m=document.createElement('div'); m.className='mo';
+  m.innerHTML=`<div class="md">
+    <div class="mhandle"></div>
+    <div class="mtitle">Tempo de descanso padrão</div>
+    <div style="font-size:13px;color:var(--t2);margin:-10px 0 18px;line-height:1.5">
+      Usado automaticamente ao marcar cada série durante o treino.
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px">
+      ${OPTIONS.map(s=>`
+        <button data-s="${s}" style="
+          height:64px;border-radius:14px;
+          background:${s===current?'var(--green-dim)':'var(--bg-3)'};
+          border:1.5px solid ${s===current?'var(--green-line)':'var(--line-2)'};
+          color:${s===current?'var(--green)':'var(--t1)'};
+          cursor:pointer;transition:all .15s;
+          display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+        ">
+          <span style="font-family:var(--mono);font-weight:700;font-size:18px">${s<60?s+'s':s/60+'min'}</span>
+          <span style="font-size:10px;letter-spacing:.08em;opacity:.6">${s===90?'recomendado':s<=45?'curto':s>=180?'longo':''}</span>
+        </button>
+      `).join('')}
+    </div>
+    <button class="btn bg" onclick="App.closeModal()">Cancelar</button>
+  </div>`;
+  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
+  $('mroot').appendChild(m);
+  m.querySelectorAll('button[data-s]').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      App._saveRestTime(+btn.dataset.s, null);
+      App.toast(`Descanso padrão: ${+btn.dataset.s<60?btn.dataset.s+'s':+btn.dataset.s/60+'min'}`);
+    });
+  });
 },
 
 async cancelWorkout(){
