@@ -2101,9 +2101,32 @@ self.addEventListener('notificationclick', e => {
     .catch(() => {});
 }
 (()=>{
-  const mf={name:'EVOLV',short_name:'EVOLV',theme_color:'#0E1015',background_color:'#0E1015',display:'standalone',orientation:'portrait',start_url:'.',icons:[{src:'icon.png',sizes:'512x512',type:'image/png',purpose:'any maskable'}]};
-  const l=document.createElement('link');l.rel='manifest';
-  l.href=URL.createObjectURL(new Blob([JSON.stringify(mf)],{type:'application/json'}));
+  // [ICON] Dois entries separados para o mesmo arquivo:
+  //  - "any"      → Android/Chrome usa o ícone sem máscara (preserva bordas arredondadas e fundo escuro)
+  //  - "maskable" → sistemas que exigem maskable usam este entry, mas como o ícone já tem
+  //                 safe zone adequada (fundo escuro cobrindo toda a área) o resultado é correto
+  // NÃO combine "any maskable" num único entry: isso faz o Chrome Android aplicar
+  // a máscara circular e recortar o ícone, gerando a borda branca indesejada.
+  const icons = [
+    { src:'icon.png', sizes:'192x192', type:'image/png', purpose:'any' },
+    { src:'icon.png', sizes:'512x512', type:'image/png', purpose:'any' },
+    { src:'icon.png', sizes:'512x512', type:'image/png', purpose:'maskable' },
+  ];
+  const mf = {
+    name: 'EVOLV',
+    short_name: 'EVOLV',
+    description: 'Aplicativo de gestão de treinos',
+    theme_color: '#0E1015',
+    background_color: '#0E1015',   // cor usada no splash screen, deve combinar com o ícone
+    display: 'standalone',
+    orientation: 'portrait',
+    start_url: '.',
+    scope: '.',
+    icons,
+  };
+  const l = document.createElement('link');
+  l.rel = 'manifest';
+  l.href = URL.createObjectURL(new Blob([JSON.stringify(mf)], {type:'application/json'}));
   document.head.appendChild(l);
 })();
 

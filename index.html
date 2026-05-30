@@ -3,16 +3,30 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
-<link rel="icon" type="image/x-icon" href="favicon.ico">
+<link rel="icon" type="image/png" href="icon.png">
 <title>EVOLV</title>
+
+<!-- PWA / iOS ─────────────────────────────────────────────────────────
+  apple-mobile-web-app-status-bar-style: "black" mantém a barra preta
+  combinando com o fundo escuro do app. "black-translucent" causava
+  sobreposição de conteúdo no iOS 16+.
+
+  apple-touch-icon SEM "precomposed": o iOS aplica apenas o arredondamento
+  padrão sem adicionar borda branca, desde que icon.png preencha toda a
+  área sem transparência nas bordas. NÃO use apple-touch-icon-precomposed.
+──────────────────────────────────────────────────────────────────────── -->
 <meta name="theme-color" content="#0E1015">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="EVOLV">
 <link rel="apple-touch-icon" href="icon.png">
-<!-- FIX 1: evolv-tokens.css agora está linkado -->
-<link rel="stylesheet" href="evolv-tokens.css?v=20260528j">
-<link rel="stylesheet" href="evolv-styles.css?v=20260528j">
+<link rel="apple-touch-icon" sizes="180x180" href="icon.png">
+<link rel="apple-touch-icon" sizes="152x152" href="icon.png">
+<link rel="apple-touch-icon" sizes="120x120" href="icon.png">
+
+<link rel="stylesheet" href="evolv-tokens.css?v=20260529k">
+<link rel="stylesheet" href="evolv-styles.css?v=20260529k">
+
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
@@ -223,6 +237,6 @@
 <div id="mroot"></div>
 <input type="file" accept="application/json" id="import-file-input" style="display:none" onchange="App.handleImportFile(event)">
 
-<script src="evolv-app.js?v=20260528j"></script>
+<script src="evolv-app.js?v=20260529k"></script>
 </body>
 </html>
