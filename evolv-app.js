@@ -262,6 +262,10 @@ const DB = {
     if(DB._local){DB.cache.sessoes.push(d);DB._lsave('sessoes');return;}
     await DB._col('sessoes').child(d.id).set(d);
   },
+  async delSessao(id){
+    if(DB._local){DB.cache.sessoes=DB.cache.sessoes.filter(s=>s.id!==id);DB._lsave('sessoes');App.renderStats();return;}
+    await DB._col('sessoes').child(id).remove();
+  },
   async addPeso(d){
     if(DB._local){DB.cache.pesos.push(d);DB.cache.pesos.sort((a,b)=>a.date.localeCompare(b.date));DB._lsave('pesos');App.renderPeso();return;}
     await DB._col('pesos').child(d.id).set(d);
@@ -1098,6 +1102,40 @@ renderStats(){
       </div>
       <div class="cwrap" style="margin-top:8px"><canvas id="ch-pe"></canvas></div>
     </div>`:''}
+
+    <!-- HISTÓRICO DE TREINOS -->
+    ${sess.length?`
+    <div class="eyebrow" style="margin:18px 0 10px">Histórico de treinos</div>
+    <div class="card" style="padding:8px 0">
+      ${sess.slice().reverse().map((s,i,arr)=>{
+        const fichas=DB.fichas();
+        const f=fichas.find(x=>x.id===s.fichaId);
+        const d=f?.days?.[s.dayIdx];
+        const name=esc(d?.name||f?.name||'Treino');
+        const durMin=Math.round((s.dur||0)/60);
+        const sets=(s.exs||[]).reduce((a,e)=>a+(e.sets||[]).filter(x=>x.done).length,0);
+        const exCount=(s.exs||[]).length;
+        const dateLabel=fd(s.date.slice(0,10));
+        const color=S.fichaColors[fichas.indexOf(f)%S.fichaColors.length]||'var(--green)';
+        return `<div class="prow" style="padding:12px 16px;border-bottom:${i<arr.length-1?'1px solid var(--line)':'none'}">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13.5px;font-weight:600;color:var(--t0);
+              white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
+            <div style="font-size:11.5px;color:var(--t2);margin-top:3px;display:flex;gap:10px;flex-wrap:wrap">
+              <span>${dateLabel}</span>
+              ${durMin>0?`<span>${IC.stopwatch(11)} ${durMin}min</span>`:''}
+              <span>${IC.dumbbell(11)} ${exCount} ex · ${sets} séries</span>
+            </div>
+          </div>
+          <div class="del" onclick="App.delSessao('${esc(s.id)}')" title="Excluir treino"
+            style="width:32px;height:32px;border-radius:9px;background:var(--red-dim);
+              color:var(--red);display:flex;align-items:center;justify-content:center;
+              cursor:pointer;flex-shrink:0;margin-left:12px;transition:transform .12s">
+            ${IC.trash(14)}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`:''}
   `;
 
   setTimeout(()=>{
@@ -1422,6 +1460,24 @@ async showConfirmDialog(opts){
       if(onConfirm) await onConfirm();
       resolve(true);
     });
+  });
+},
+
+async delSessao(id){
+  await App.showConfirmDialog({
+    title: 'Excluir treino',
+    message: 'Este treino será removido permanentemente do seu histórico e não afetará mais suas estatísticas.',
+    confirmText: 'Excluir treino',
+    cancelText: 'Cancelar',
+    isDangerous: true,
+    onConfirm: async()=>{
+      try{
+        await DB.delSessao(id);
+        App.renderStats();
+        if(S.page==='home') App.renderHome();
+        App.toast('Treino excluído.');
+      }catch(e){ App.toast('Erro ao excluir.'); }
+    }
   });
 },
 
