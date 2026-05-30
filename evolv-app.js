@@ -1584,8 +1584,12 @@ deleteNotification(id){
   localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
   App.renderNotifyBadge();
   App._renderNotifItems();
+  // Atualiza contador no cabeçalho
   const sub=document.querySelector('#mroot .mo .md div[style*="registros"]');
   if(sub) sub.textContent=`${S.notifications.length} registros`;
+  // Esconde o botão "Limpar tudo" quando não há mais notificações
+  const clearBtn=document.querySelector('#mroot .mo .md button[onclick*="clearAllNotifications"]');
+  if(clearBtn) clearBtn.style.display=S.notifications.length?'':'none';
 },
 
 clearAllNotifications(){
