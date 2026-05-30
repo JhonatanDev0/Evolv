@@ -517,9 +517,20 @@ const DB = {
 
   async setPref(key, value){
     DB.cache.prefs = {...(DB.cache.prefs||{}), [key]:value};
+    // Persiste no IDB sempre
     await IDB.setPref(key, value);
     if(DB._local){ return; }
-    await DB._write('update','prefs','prefs',{[key]:value});
+    // Firebase: update direto no nó prefs (não passa por _write para evitar path errado)
+    if(DB._online && DB._db){
+      try{
+        await DB._col('prefs').update({[key]: value});
+        return;
+      }catch(e){
+        console.warn('[EVOLV] setPref Firebase falhou, enfileirando:', e);
+      }
+    }
+    // Offline: enfileira com path correto
+    await SyncQueue.push('update', 'prefs', '', {[key]: value});
   },
 
   _listenPrefs(){
@@ -638,6 +649,7 @@ renderPage(p){
   else if(p==='timer'){ App.renderTimerTicks(); App._syncRestTimeUI(); }
   else if(p==='stats') App.renderStats();
   else if(p==='peso') App.renderPeso();
+  else if(p==='perfil') App.renderPerfil();
 },
 
 // Sincroniza o label e preset da página Timer com a pref restTime
@@ -885,6 +897,7 @@ saveWeekTarget(n){
   DB.setPref('weekTarget', n);
   App.closeModal();
   App.renderHome();
+  if(S.page==='perfil') App.renderPerfil();
   App.toast(`Meta: ${n} treinos por semana`);
 },
 renderFichas(){
@@ -906,7 +919,7 @@ renderFichas(){
       <button class="icon-btn" onclick="App.showImportFicha()" title="Importar JSON">
         ${IC.upload(16)}
       </button>
-      <button class="icon-btn" onclick="App.exportFichas()" title="Exportar fichas">
+      <button class="icon-btn" onclick="App.showBackupModal()" title="Backup e exportação">
         ${IC.export(16)}
       </button>
       <button class="icon-btn" onclick="App.downloadTemplate()" title="Baixar modelo JSON">
@@ -1817,35 +1830,264 @@ async delFicha(id){
 },
 
 // ─── EXPORT / IMPORT ─────────────────────────────────────────────
-exportFichas(){
-  const fichas=DB.fichas();
-  if(!fichas.length){App.toast('Nenhuma ficha para exportar');return;}
-  const data={
-    evolv_export:true,
-    exported_at:new Date().toISOString(),
-    fichas:fichas.map(f=>({name:f.name,days:f.days}))
-  };
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
-  a.download=`evolv-fichas-${today()}.json`;
-  a.click();
-  App.toast('Fichas exportadas!');
+// ═══════════════════════════════════════════════════════════════
+// BACKUP & EXPORT
+// ═══════════════════════════════════════════════════════════════
+
+showBackupModal(){
+  App.closeModal();
+  const fichas  = DB.fichas();
+  const sessoes = DB.sessoes();
+  const pesos   = DB.pesos();
+
+  const m = document.createElement('div'); m.className='mo';
+  m.innerHTML=`<div class="md">
+    <div class="mhandle"></div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
+      <div style="width:42px;height:42px;border-radius:12px;background:var(--green-dim);color:var(--green);border:1px solid var(--green-line);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        ${IC.export(20)}
+      </div>
+      <div>
+        <div style="font-size:19px;font-weight:700;letter-spacing:-0.01em">Backup e exportação</div>
+        <div style="font-size:12px;color:var(--t2);margin-top:1px">Seus dados, no seu controle</div>
+      </div>
+    </div>
+
+    <!-- Resumo dos dados -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:20px">
+      <div style="background:var(--bg-3);border-radius:12px;padding:12px;text-align:center">
+        <div style="font-family:var(--mono);font-weight:800;font-size:20px;color:var(--t0)">${fichas.length}</div>
+        <div style="font-size:10px;color:var(--t2);margin-top:2px;text-transform:uppercase;letter-spacing:.06em">fichas</div>
+      </div>
+      <div style="background:var(--bg-3);border-radius:12px;padding:12px;text-align:center">
+        <div style="font-family:var(--mono);font-weight:800;font-size:20px;color:var(--t0)">${sessoes.length}</div>
+        <div style="font-size:10px;color:var(--t2);margin-top:2px;text-transform:uppercase;letter-spacing:.06em">treinos</div>
+      </div>
+      <div style="background:var(--bg-3);border-radius:12px;padding:12px;text-align:center">
+        <div style="font-family:var(--mono);font-weight:800;font-size:20px;color:var(--t0)">${pesos.length}</div>
+        <div style="font-size:10px;color:var(--t2);margin-top:2px;text-transform:uppercase;letter-spacing:.06em">pesagens</div>
+      </div>
+    </div>
+
+    <!-- Exportar backup completo -->
+    <div class="card" style="margin-bottom:10px">
+      <div class="eyebrow" style="margin-bottom:6px">Backup completo</div>
+      <div style="font-size:12px;color:var(--t2);line-height:1.5;margin-bottom:12px">
+        Exporta tudo: fichas, histórico de treinos, pesagens e preferências. Use para migrar para outro aparelho ou guardar um backup seguro.
+      </div>
+      <button class="btn bp lg" onclick="App.exportFullBackup()">
+        ${IC.export(15)} Exportar backup (.json)
+      </button>
+    </div>
+
+    <!-- Exportar CSV -->
+    <div class="card" style="margin-bottom:10px">
+      <div class="eyebrow" style="margin-bottom:6px">Histórico em planilha</div>
+      <div style="font-size:12px;color:var(--t2);line-height:1.5;margin-bottom:12px">
+        Exporta o histórico de treinos como CSV — compatível com Excel, Google Sheets e qualquer editor de planilhas.
+      </div>
+      <button class="btn bg lg" onclick="App.exportSessionsCsv()" ${!sessoes.length?'disabled style="opacity:.45"':''}>
+        ${IC.trendUp(15)} Exportar histórico (.csv)
+      </button>
+    </div>
+
+    <!-- Importar backup -->
+    <div class="card" style="margin-bottom:10px">
+      <div class="eyebrow" style="margin-bottom:6px">Restaurar backup</div>
+      <div style="font-size:12px;color:var(--t2);line-height:1.5;margin-bottom:12px">
+        Importa um backup EVOLV (.json). Fichas e pesagens são mescladas; sessões já existentes não são duplicadas.
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn bg lg" onclick="App.importBackupFileSelector()" style="flex:1">
+          ${IC.download(15)} Selecionar arquivo
+        </button>
+        <button class="btn bg lg" onclick="App.showImportFicha()" style="flex:1">
+          ${IC.clipboard(15)} Importar fichas
+        </button>
+      </div>
+    </div>
+
+    <button class="btn bg" onclick="App.closeModal()">Fechar</button>
+  </div>`;
+  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
+  $('mroot').appendChild(m);
 },
 
-downloadTemplate(){
-  const tmpl={evolv_export:true,fichas:[{
-    name:"Hipertrofia ABC",
-    days:[
-      {name:"Treino A — Peito/Tríceps",exs:[{name:"Supino Reto",sets:4,reps:10},{name:"Supino Inclinado",sets:3,reps:12},{name:"Crucifixo",sets:3,reps:15},{name:"Tríceps Corda",sets:3,reps:12}]},
-      {name:"Treino B — Costas/Bíceps",exs:[{name:"Remada Curvada",sets:4,reps:10},{name:"Puxada Frente",sets:3,reps:12},{name:"Rosca Direta",sets:3,reps:12},{name:"Rosca Martelo",sets:3,reps:12}]},
-      {name:"Treino C — Pernas",exs:[{name:"Agachamento Livre",sets:4,reps:10},{name:"Leg Press",sets:4,reps:12},{name:"Extensora",sets:3,reps:15},{name:"Panturrilha",sets:4,reps:20}]}
-    ]
-  }]};
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([JSON.stringify(tmpl,null,2)],{type:'application/json'}));
-  a.download='evolv-modelo.json';
+exportFullBackup(){
+  const data = {
+    evolv_backup: true,
+    version: 2,
+    exported_at: new Date().toISOString(),
+    sync_id: localStorage.getItem('evolv_sync_id')||null,
+    fichas:  DB.fichas(),
+    sessoes: DB.sessoes(),
+    pesos:   DB.pesos(),
+    prefs:   DB.getPrefs(),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `evolv-backup-${today()}.json`;
   a.click();
-  App.toast('Modelo baixado!');
+  setTimeout(()=>URL.revokeObjectURL(a.href), 10000);
+  App.toast('Backup exportado!');
+},
+
+exportSessionsCsv(){
+  const sessoes = DB.sessoes();
+  const fichas  = DB.fichas();
+  if(!sessoes.length){ App.toast('Nenhuma sessão para exportar'); return; }
+
+  const rows = [
+    ['Data','Ficha','Dia','Duração (min)','Exercícios','Séries totais','Volume (kg)']
+  ];
+
+  sessoes.slice().reverse().forEach(s=>{
+    const f = fichas.find(x=>x.id===s.fichaId);
+    const d = f?.days?.[s.dayIdx];
+    const durMin  = Math.round((s.dur||0)/60);
+    const exCount = (s.exs||[]).length;
+    const series  = (s.exs||[]).reduce((a,e)=>a+(e.sets||[]).filter(x=>x.done).length, 0);
+    const volume  = (s.exs||[]).reduce((a,e)=>a+(e.sets||[]).filter(x=>x.done).reduce((b,x)=>b+(+x.reps||0)*(+x.w||0),0), 0);
+    rows.push([
+      s.date.slice(0,10),
+      f?.name||'—',
+      d?.name||'—',
+      durMin||'—',
+      exCount,
+      series,
+      volume||'—',
+    ]);
+  });
+
+  const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\r\n');
+  const bom = '\uFEFF'; // BOM para Excel reconhecer UTF-8
+  const blob = new Blob([bom + csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `evolv-historico-${today()}.csv`;
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 10000);
+  App.toast('CSV exportado!');
+},
+
+importBackupFileSelector(){
+  // Reutiliza o input de arquivo existente, mudando o accept temporariamente
+  const inp = $('import-file-input');
+  if(!inp) return;
+  inp.accept = 'application/json,.json,.csv';
+  inp.onchange = App.handleBackupFile;
+  inp.click();
+},
+
+handleBackupFile(e){
+  const file = e.target.files?.[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    if(file.name.endsWith('.csv')){
+      App.toast('Para importar, use o arquivo .json de backup.');
+    } else {
+      App.importFullBackup(reader.result);
+    }
+  };
+  reader.onerror = ()=>App.toast('Não foi possível ler o arquivo.');
+  reader.readAsText(file, 'UTF-8');
+  e.target.value = '';
+  // Restaura o handler original
+  e.target.onchange = App.handleImportFile;
+  e.target.accept   = 'application/json';
+},
+
+async importFullBackup(raw){
+  App.closeModal();
+  if(!raw?.trim()){ App.toast('Arquivo inválido.'); return; }
+
+  let data;
+  try{ data = JSON.parse(raw); }
+  catch{ App.toast('JSON inválido — verifique o arquivo.'); return; }
+
+  if(!data.evolv_backup){ App.toast('Este arquivo não é um backup EVOLV válido.'); return; }
+
+  const safeStr = (v, max=200)=>String(v||'').slice(0,max).replace(/[<>]/g,'');
+  const safeNum = (v,fb=0)=>{ const n=+v; return isNaN(n)?fb:n; };
+
+  // Contadores para o relatório
+  let fichasAdded=0, sessoesAdded=0, pesosAdded=0;
+
+  // Merge fichas — evita duplicatas por ID
+  const fichasExistentes = new Set(DB.fichas().map(f=>f.id));
+  for(const f of (data.fichas||[])){
+    if(!f?.name || fichasExistentes.has(f.id)) continue;
+    const item = {
+      id:   f.id||uid(), at: f.at||Date.now(),
+      name: safeStr(f.name, 80),
+      days: (f.days||[]).slice(0,30).map(d=>({
+        name: safeStr(d.name||'Dia', 80),
+        exs:  (d.exs||[]).slice(0,50).map(e=>({
+          name: safeStr(e.name||'', 80),
+          sets: Math.min(20, Math.max(1, +e.sets||3)),
+          reps: Math.min(200, Math.max(1, +e.reps||12)),
+          w: 0,
+        })).filter(e=>e.name.trim()),
+      })),
+    };
+    await DB.addFicha(item);
+    fichasAdded++;
+  }
+
+  // Merge sessões — evita duplicatas por ID
+  const sessoesExistentes = new Set(DB.sessoes().map(s=>s.id));
+  for(const s of (data.sessoes||[])){
+    if(!s?.id || sessoesExistentes.has(s.id)) continue;
+    const item = {
+      id:      s.id,
+      fichaId: safeStr(s.fichaId||'', 50),
+      dayIdx:  safeNum(s.dayIdx, 0),
+      date:    safeStr(s.date||new Date().toISOString(), 30),
+      dur:     safeNum(s.dur, 0),
+      exs:     (s.exs||[]).slice(0,50).map(e=>({
+        name: safeStr(e.name||'', 80),
+        sets: (e.sets||[]).slice(0,30).map(x=>({
+          reps: safeNum(x.reps, 0), w: safeNum(x.w, 0), done: !!x.done,
+        })),
+      })),
+    };
+    await DB.addSessao(item);
+    sessoesAdded++;
+  }
+
+  // Merge pesos — evita duplicatas por ID
+  const pesosExistentes = new Set(DB.pesos().map(p=>p.id));
+  for(const p of (data.pesos||[])){
+    if(!p?.id || pesosExistentes.has(p.id)) continue;
+    const item = {
+      id:   p.id,
+      w:    safeNum(p.w, 0),
+      date: safeStr(p.date||new Date().toISOString().slice(0,10), 20),
+      obs:  safeStr(p.obs||'', 200),
+    };
+    await DB.addPeso(item);
+    pesosAdded++;
+  }
+
+  // Restaura prefs (sem sobrescrever tema atual)
+  if(data.prefs && typeof data.prefs === 'object'){
+    const skip = new Set(['theme','onboarded']);
+    for(const [k,v] of Object.entries(data.prefs)){
+      if(!skip.has(k)) await DB.setPref(k, v);
+    }
+  }
+
+  App.renderPage(S.page);
+  App.notify(
+    `Backup importado: ${fichasAdded} fichas, ${sessoesAdded} treinos, ${pesosAdded} pesagens.`,
+    'success'
+  );
+},
+
+exportFichas(){
+  // Mantido para compatibilidade — redireciona para o backup completo
+  App.showBackupModal();
 },
 
 showImportFicha(){
@@ -1864,6 +2106,22 @@ showImportFicha(){
   </div>`;
   m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
   $('mroot').appendChild(m);
+},
+
+downloadTemplate(){
+  const tmpl={evolv_export:true,fichas:[{
+    name:"Hipertrofia ABC",
+    days:[
+      {name:"Treino A — Peito/Tríceps",exs:[{name:"Supino Reto",sets:4,reps:10},{name:"Supino Inclinado",sets:3,reps:12},{name:"Crucifixo",sets:3,reps:15},{name:"Tríceps Corda",sets:3,reps:12}]},
+      {name:"Treino B — Costas/Bíceps",exs:[{name:"Remada Curvada",sets:4,reps:10},{name:"Puxada Frente",sets:3,reps:12},{name:"Rosca Direta",sets:3,reps:12},{name:"Rosca Martelo",sets:3,reps:12}]},
+      {name:"Treino C — Pernas",exs:[{name:"Agachamento Livre",sets:4,reps:10},{name:"Leg Press",sets:4,reps:12},{name:"Extensora",sets:3,reps:15},{name:"Panturrilha",sets:4,reps:20}]}
+    ]
+  }]};
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(tmpl,null,2)],{type:'application/json'}));
+  a.download='evolv-modelo.json';
+  a.click();
+  App.toast('Modelo baixado!');
 },
 
 handleImportFile(e){
@@ -2244,7 +2502,8 @@ showRestTimeSetup(onConfirm){
 async _saveRestTime(seconds, onConfirm){
   await DB.setPref('restTime', seconds);
   App.closeModal();
-  App.renderTimerPage(); // atualiza preset selecionado na página timer
+  App.renderTimerPage();
+  if(S.page==='perfil') App.renderPerfil();
   if(onConfirm) onConfirm();
 },
 
@@ -2543,6 +2802,9 @@ showSyncModal(){
 }</code>
       </div>
     </div>
+    <button class="btn bg lg" onclick="App.closeModal();setTimeout(()=>App.showBackupModal(),100)" style="margin-bottom:8px">
+      ${IC.export(15)} Backup e exportação
+    </button>
     <button class="btn bg" onclick="App.closeModal()">Fechar</button>
   </div>`;
   m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
@@ -2989,9 +3251,271 @@ boot(){
         font-variant-numeric: tabular-nums !important;
         font-weight: 800 !important;
       }
+
+      #theme-toggle-knob {
+        transition: left .22s cubic-bezier(0.34,1.56,0.64,1) !important;
+      }
+      #theme-toggle-pill {
+        transition: background .2s ease, border-color .2s ease !important;
+      }
+
+      /* ── Perfil — linhas de preferência ── */
+      .pref-row {
+        display: flex; align-items: center; gap: 12px;
+        padding: 13px 16px; border-bottom: 1px solid var(--line);
+        cursor: pointer; transition: background .12s;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .pref-row:active { background: var(--bg-3); }
+      .pref-ico {
+        width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        color: var(--t1);
+      }
+      .pref-info { flex: 1; min-width: 0; }
+      .pref-label { font-size: 14px; font-weight: 600; color: var(--t0); }
+      .pref-val   { font-size: 12px; color: var(--t2); margin-top: 1px; }
+      [data-theme="light"] .pref-row:active { background: var(--bg-2); }
     `;
     document.head.appendChild(s);
   }
+},
+
+// ═══════════════════════════════════════════════════════════════
+// PERFIL
+// ═══════════════════════════════════════════════════════════════
+renderPerfil(){
+  const root = $('perfil-content'); if(!root) return;
+  const name     = DB.getPref('displayName','');
+  const theme    = DB.getPref('theme','dark');
+  const restTime = DB.getPref('restTime', 90);
+  const weekTarget = DB.getPref('weekTarget', 5);
+  const sid      = localStorage.getItem('evolv_sync_id')||'—';
+  const isLight  = theme === 'light';
+
+  const fichas  = DB.fichas();
+  const sessoes = DB.sessoes();
+  const pesos   = DB.pesos();
+
+  // Avatar baseado nas iniciais do nome
+  const initials = name.trim()
+    ? name.trim().split(/\s+/).slice(0,2).map(w=>w[0].toUpperCase()).join('')
+    : '?';
+
+  root.innerHTML = `
+    <!-- Avatar + nome -->
+    <div style="text-align:center;padding:28px 20px 20px">
+      <div onclick="App.editProfileName()" style="
+        width:72px;height:72px;border-radius:24px;
+        background:var(--green-dim);color:var(--green);
+        border:1.5px solid var(--green-line);
+        display:inline-flex;align-items:center;justify-content:center;
+        font-size:24px;font-weight:800;letter-spacing:-0.02em;
+        cursor:pointer;margin-bottom:12px;
+        transition:transform .15s cubic-bezier(0.34,1.56,0.64,1);
+      " onmousedown="this.style.transform='scale(0.93)'" onmouseup="this.style.transform=''" ontouchstart="this.style.transform='scale(0.93)'" ontouchend="this.style.transform=''">${esc(initials)}</div>
+      <div style="font-size:20px;font-weight:700;color:var(--t0);letter-spacing:-0.02em;margin-bottom:4px">
+        ${name ? esc(name) : '<span style="color:var(--t3)">Adicionar nome</span>'}
+      </div>
+      <div style="font-size:12px;color:var(--t2)">${sessoes.length} treinos registrados</div>
+    </div>
+
+    <!-- Stats rápidas -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 20px">
+      <div class="sc">
+        <div class="sl">Fichas</div>
+        <div class="sv">${fichas.length}</div>
+        <div class="ss">criadas</div>
+      </div>
+      <div class="sc">
+        <div class="sl" style="color:var(--heat)">Treinos</div>
+        <div class="sv">${sessoes.length}</div>
+        <div class="ss">totais</div>
+      </div>
+      <div class="sc">
+        <div class="sl" style="color:var(--cool)">Pesagens</div>
+        <div class="sv">${pesos.length}</div>
+        <div class="ss">registradas</div>
+      </div>
+    </div>
+
+    <!-- PREFERÊNCIAS -->
+    <div class="eyebrow" style="margin:0 0 10px">Preferências</div>
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px">
+
+      <!-- Tema -->
+      <div class="pref-row" onclick="App.toggleTheme()">
+        <div class="pref-ico" style="background:var(--bg-3)">${IC.moon(18)}</div>
+        <div class="pref-info">
+          <div class="pref-label">Tema</div>
+          <div class="pref-val">${isLight ? 'Claro' : 'Escuro'}</div>
+        </div>
+        <div id="theme-toggle-pill" style="
+          width:44px;height:26px;border-radius:999px;flex-shrink:0;pointer-events:none;
+          background:${isLight?'var(--green)':'var(--bg-4)'};
+          border:1px solid ${isLight?'var(--green-line)':'var(--line-2)'};
+          position:relative;transition:background .2s,border-color .2s;
+        ">
+        <div id="theme-toggle-knob" style="
+            position:absolute;top:3px;
+            left:${isLight?'21px':'3px'};
+            width:18px;height:18px;border-radius:50%;
+            background:#fff;
+            box-shadow:0 1px 4px rgba(0,0,0,0.2);
+          "></div>
+        </div>
+      </div>
+
+      <!-- Meta semanal -->
+      <div class="pref-row" onclick="App.showWeekTargetModal()">
+        <div class="pref-ico" style="background:var(--cool-dim);color:var(--cool)">${IC.activity(18)}</div>
+        <div class="pref-info">
+          <div class="pref-label">Meta semanal</div>
+          <div class="pref-val">${weekTarget} dia${weekTarget!==1?'s':''} por semana</div>
+        </div>
+        ${IC.chevronRight(16)}
+      </div>
+
+      <!-- Descanso padrão -->
+      <div class="pref-row" onclick="App.showRestTimeModal()">
+        <div class="pref-ico" style="background:var(--heat-dim);color:var(--heat)">${IC.stopwatch(18)}</div>
+        <div class="pref-info">
+          <div class="pref-label">Descanso padrão</div>
+          <div class="pref-val">${restTime<60?restTime+'s':restTime/60+'min'} entre séries</div>
+        </div>
+        ${IC.chevronRight(16)}
+      </div>
+
+      <!-- Notificações -->
+      <div class="pref-row" onclick="App.requestNotifPermission()" style="border-bottom:none">
+        <div class="pref-ico" style="background:var(--violet-dim);color:var(--violet)">${IC.bell(18)}</div>
+        <div class="pref-info">
+          <div class="pref-label">Notificações push</div>
+          <div class="pref-val">${typeof Notification!=='undefined'&&Notification.permission==='granted'?'Ativadas':'Toque para ativar'}</div>
+        </div>
+        ${IC.chevronRight(16)}
+      </div>
+    </div>
+
+    <!-- DADOS E SYNC -->
+    <div class="eyebrow" style="margin:0 0 10px">Dados e sync</div>
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px">
+
+      <!-- Backup -->
+      <div class="pref-row" onclick="App.showBackupModal()">
+        <div class="pref-ico" style="background:var(--green-dim);color:var(--green)">${IC.export(18)}</div>
+        <div class="pref-info">
+          <div class="pref-label">Backup e exportação</div>
+          <div class="pref-val">JSON completo · CSV · importar</div>
+        </div>
+        ${IC.chevronRight(16)}
+      </div>
+
+      <!-- Sync -->
+      <div class="pref-row" onclick="App.showSyncModal()" style="border-bottom:none">
+        <div class="pref-ico" style="background:var(--cool-dim);color:var(--cool)">${IC.sync(18)}</div>
+        <div class="pref-info">
+          <div class="pref-label">Sync entre dispositivos</div>
+          <div class="pref-val" style="font-family:var(--mono);font-size:10px;letter-spacing:.04em">${sid.slice(0,20)}…</div>
+        </div>
+        ${IC.chevronRight(16)}
+      </div>
+    </div>
+
+    <!-- SOBRE -->
+    <div class="eyebrow" style="margin:0 0 10px">Sobre</div>
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px">
+      <div class="pref-row" style="border-bottom:none;cursor:default">
+        <div class="pref-ico" style="background:var(--bg-3)">
+          <img src="logo.png" style="width:18px;height:18px;object-fit:contain">
+        </div>
+        <div class="pref-info">
+          <div class="pref-label">EVOLV</div>
+          <div class="pref-val">App de gestão de treinos</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ZONA DE PERIGO -->
+    <div class="eyebrow" style="margin:0 0 10px;color:var(--red)">Zona de perigo</div>
+    <div class="card" style="padding:0;overflow:hidden;border-color:var(--red-dim);margin-bottom:32px">
+      <div class="pref-row" onclick="App.confirmClearData('sessoes')" style="border-bottom:1px solid var(--line)">
+        <div class="pref-ico" style="background:var(--red-dim);color:var(--red)">${IC.trash(18)}</div>
+        <div class="pref-info">
+          <div class="pref-label" style="color:var(--red)">Apagar histórico de treinos</div>
+          <div class="pref-val">${sessoes.length} sessões serão removidas</div>
+        </div>
+        ${IC.chevronRight(16)}
+      </div>
+      <div class="pref-row" onclick="App.confirmClearData('all')" style="border-bottom:none">
+        <div class="pref-ico" style="background:var(--red-dim);color:var(--red)">${IC.close(18)}</div>
+        <div class="pref-info">
+          <div class="pref-label" style="color:var(--red)">Apagar todos os dados</div>
+          <div class="pref-val">Fichas, treinos, pesagens e prefs</div>
+        </div>
+        ${IC.chevronRight(16)}
+      </div>
+    </div>
+  `;
+},
+
+editProfileName(){
+  App.closeModal();
+  const current = DB.getPref('displayName','');
+  const m = document.createElement('div'); m.className='mo';
+  m.innerHTML=`<div class="md">
+    <div class="mhandle"></div>
+    <div class="mtitle">Seu nome</div>
+    <div class="ig" style="margin-bottom:16px">
+      <label>Como quer ser chamado?</label>
+      <input type="text" id="profile-name-input" value="${esc(current)}" placeholder="Seu nome" maxlength="40" autocomplete="off">
+    </div>
+    <button class="btn bp lg" onclick="App.saveProfileName()">Salvar</button>
+    <button class="btn bg" onclick="App.closeModal()" style="margin-top:8px">Cancelar</button>
+  </div>`;
+  m.addEventListener('click',e=>{if(e.target===m)App.closeModal();});
+  $('mroot').appendChild(m);
+  setTimeout(()=>{ const inp=$('profile-name-input'); inp?.focus(); inp?.select(); }, 200);
+},
+
+async saveProfileName(){
+  const inp = document.getElementById('profile-name-input');
+  const val = (inp?.value||'').trim().slice(0,40);
+  await DB.setPref('displayName', val);
+  App.closeModal();
+  App.renderPerfil();
+  App.toast(val ? `Olá, ${val}!` : 'Nome removido');
+},
+
+async confirmClearData(what){
+  const labels = {
+    sessoes: { title:'Apagar histórico', msg:`Todos os ${DB.sessoes().length} treinos registrados serão removidos permanentemente. Fichas e pesagens são mantidas.`, btn:'Apagar histórico' },
+    all:     { title:'Apagar tudo',      msg:'Todos os seus dados serão removidos: fichas, treinos, pesagens e preferências. Esta ação não pode ser desfeita.', btn:'Apagar tudo' },
+  };
+  const l = labels[what];
+  App.showConfirmDialog({
+    title: l.title,
+    message: l.msg,
+    confirmText: l.btn,
+    cancelText: 'Cancelar',
+    isDangerous: true,
+    onConfirm: async ()=>{ await App._clearData(what); },
+  });
+},
+
+async _clearData(what){
+  if(what==='sessoes' || what==='all'){
+    for(const s of [...DB.sessoes()]) await DB.delSessao(s.id);
+  }
+  if(what==='all'){
+    for(const f of [...DB.fichas()])  await DB.delFicha(f.id);
+    for(const p of [...DB.pesos()])   await DB.delPeso(p.id);
+    await IDB.clear('prefs');
+    DB.cache.prefs = {};
+  }
+  App.renderPerfil();
+  App.renderHome();
+  App.toast(what==='all' ? 'Todos os dados removidos.' : 'Histórico apagado.');
 },
 
 updateDot(){
@@ -3439,6 +3963,15 @@ _applyTheme(theme){
     const ico = document.getElementById('theme-ico');
     if(ico) ico.innerHTML='<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>';
   }
+  // Atualiza toggle pill do perfil se estiver visível
+  const pill  = document.getElementById('theme-toggle-pill');
+  const knob  = document.getElementById('theme-toggle-knob');
+  if(pill && knob){
+    pill.style.background    = theme==='light' ? 'var(--green)' : 'var(--bg-4)';
+    pill.style.borderColor   = theme==='light' ? 'var(--green-line)' : 'var(--line-2)';
+    knob.style.left          = theme==='light' ? '21px' : '3px';
+  }
+
   root.setAttribute('data-theme', theme);
 
   // Re-renderiza a página atual para atualizar cores inline dos charts
@@ -3451,6 +3984,8 @@ toggleTheme(){
   DB.setPref('theme', next);
   App._applyTheme(next);
   App.toast(next === 'light' ? 'Tema claro ativado' : 'Tema escuro ativado');
+  // Atualiza a página de perfil se estiver aberta
+  if(S.page === 'perfil') App.renderPerfil();
 },
 
 showReconnectModal(){
