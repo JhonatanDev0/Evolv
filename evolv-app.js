@@ -2053,11 +2053,15 @@ _renderNotifItems(){
     </div>`;
     return;
   }
-  // [SEC-1] esc() em mensagens de notificação
   el.innerHTML=S.notifications.map(n=>{
     const cfg=NOTIF_CONFIG[n.type]||NOTIF_CONFIG.info;
     const timeStr=relTime(n.date);
-    return `<div style="display:flex;align-items:flex-start;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)">
+    return `<div data-nid="${esc(n.id)}" style="
+        display:flex;align-items:flex-start;gap:12px;padding:13px 0;
+        border-bottom:1px solid var(--line);
+        transition:transform .22s cubic-bezier(0.4,0,0.2,1),opacity .22s ease,max-height .25s ease;
+        overflow:hidden;max-height:120px;
+      ">
       <div style="width:38px;height:38px;border-radius:11px;background:${cfg.bg};color:${cfg.color};display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid color-mix(in oklab,${cfg.color} 20%,transparent)">
         ${cfg.ic(16)}
       </div>
@@ -2075,25 +2079,67 @@ _renderNotifItems(){
   }).join('');
 },
 
+// Anima um elemento de notificação para fora (desliza para direita + some)
+_animateNotifOut(el, onDone){
+  if(!el){ onDone(); return; }
+  el.style.transition='transform .2s cubic-bezier(0.4,0,1,1),opacity .2s ease,max-height .25s ease .05s,padding .25s ease .05s';
+  el.style.transform='translateX(60px)';
+  el.style.opacity='0';
+  el.style.maxHeight='0';
+  el.style.paddingTop='0';
+  el.style.paddingBottom='0';
+  el.style.borderBottomColor='transparent';
+  setTimeout(onDone, 270);
+},
+
 deleteNotification(id){
-  S.notifications=S.notifications.filter(n=>n.id!==id);
-  localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
-  App.renderNotifyBadge();
-  App._renderNotifItems();
-  // Atualiza contador no cabeçalho
-  const sub=document.querySelector('#mroot .mo .md div[style*="registros"]');
-  if(sub) sub.textContent=`${S.notifications.length} registros`;
-  // Esconde o botão "Limpar tudo" quando não há mais notificações
-  const clearBtn=document.querySelector('#mroot .mo .md button[onclick*="clearAllNotifications"]');
-  if(clearBtn) clearBtn.style.display=S.notifications.length?'':'none';
+  const el=document.querySelector(`[data-nid="${id}"]`);
+  App._animateNotifOut(el, ()=>{
+    S.notifications=S.notifications.filter(n=>n.id!==id);
+    localStorage.setItem('evolv_notifications',JSON.stringify(S.notifications));
+    App.renderNotifyBadge();
+    if(!S.notifications.length){
+      // Última notificação removida — fecha o modal
+      App.closeModal();
+      return;
+    }
+    App._renderNotifItems();
+    const sub=document.querySelector('#mroot .mo .md div[style*="registros"]');
+    if(sub) sub.textContent=`${S.notifications.length} registros`;
+    const clearBtn=document.querySelector('#mroot .mo .md button[onclick*="clearAllNotifications"]');
+    if(clearBtn) clearBtn.style.display=S.notifications.length?'':'none';
+  });
 },
 
 clearAllNotifications(){
-  S.notifications=[];
-  localStorage.removeItem('evolv_notifications');
-  App.renderNotifyBadge();
-  App.closeModal();
-  App.showNotifications();
+  // Anima todos os itens em cascata antes de limpar
+  const items=[...document.querySelectorAll('#np-list [data-nid]')];
+  if(!items.length){
+    S.notifications=[];
+    localStorage.removeItem('evolv_notifications');
+    App.renderNotifyBadge();
+    App.closeModal();
+    App.showNotifications();
+    return;
+  }
+  items.forEach((el,i)=>{
+    setTimeout(()=>{
+      el.style.transition='transform .18s cubic-bezier(0.4,0,1,1),opacity .18s ease,max-height .22s ease .04s,padding .22s ease .04s';
+      el.style.transform='translateX(60px)';
+      el.style.opacity='0';
+      el.style.maxHeight='0';
+      el.style.paddingTop='0';
+      el.style.paddingBottom='0';
+      el.style.borderBottomColor='transparent';
+    }, i*45); // cascata de 45ms entre cada item
+  });
+  const totalDelay = items.length*45 + 260;
+  setTimeout(()=>{
+    S.notifications=[];
+    localStorage.removeItem('evolv_notifications');
+    App.renderNotifyBadge();
+    App.closeModal();
+  }, totalDelay);
 },
 
 notify(msg,type='info'){
@@ -2468,7 +2514,7 @@ boot(){
     setTimeout(() => App.showOnboarding(), 400);
   }
 
-  // CSS de animação do sino
+  // CSS de animação do sino e modal fluido
   if(!document.getElementById('evolv-notif-styles')){
     const s=document.createElement('style');
     s.id='evolv-notif-styles';
@@ -2486,6 +2532,25 @@ boot(){
       .page{padding-bottom:18px!important}
       @supports (height:100dvh){html,body,#app{height:100dvh!important}}
       @supports (-webkit-touch-callout:none){html{height:-webkit-fill-available!important}body,#app{min-height:-webkit-fill-available!important}}
+
+      /* ── Animação fluida do modal sheet (sobrescreve o base) ──
+         Curva: começa rápido (saindo do fundo da tela), desacelera
+         expressivamente no final — igual ao sheet do iOS.
+         will-change garante que o browser use compositor layer (GPU).  */
+      @keyframes mslide{
+        from{ transform:translateY(100%); }
+        to{   transform:translateY(0);    }
+      }
+      .md{
+        animation: mslide .38s cubic-bezier(0.25,1,0.5,1) !important;
+        will-change: transform;
+      }
+      /* Overlay de fundo: fade mais lento que o sheet para não competir */
+      @keyframes mfade{
+        from{ opacity:0; }
+        to{   opacity:1; }
+      }
+      .mo{ animation: mfade .25s ease !important; }
     `;
     document.head.appendChild(s);
   }
