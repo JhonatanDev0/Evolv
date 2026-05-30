@@ -570,7 +570,15 @@ renderHome(){
   `;
 
   $('pg-home').innerHTML = `
-    <div class="hero">
+    <div class="hero" style="overflow:hidden;position:relative">
+      <!-- Padrão vetorial de fundo -->
+      <svg style="position:absolute;inset:0;width:100%;height:100%;opacity:.045;pointer-events:none" viewBox="0 0 360 200" preserveAspectRatio="xMidYMid slice">
+        <!-- Grade de pontos -->
+        ${Array.from({length:8},(_,row)=>Array.from({length:12},(_,col)=>`<circle cx="${col*34+8}" cy="${row*28+8}" r="1.5" fill="currentColor"/>`).join('')).join('')}
+        <!-- Linhas de tendência -->
+        <polyline points="0,160 40,140 80,150 120,110 160,120 200,90 240,100 280,70 320,80 360,50" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <polyline points="0,180 40,170 80,175 120,155 160,160 200,140 240,148 280,125 320,132 360,108" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" opacity=".6"/>
+      </svg>
       <div class="hg">${ico}<span>${txt}</span></div>
       <div class="ht">${heroTitle}</div>
       ${heroMeta?`<div class="hmeta">${heroMeta}</div>`:''}
@@ -697,10 +705,23 @@ renderFichas(){
 
   if(!fichas.length){
     root.innerHTML = top + `
-      <div class="empty">
-        <div class="empty-ico">${IC.clipboard(28)}</div>
-        <div class="et">Nenhuma ficha criada</div>
-        <div class="es">Crie sua primeira ficha de treino<br>para começar a registrar suas sessões.</div>
+      <div style="text-align:center;padding:48px 24px 32px">
+        <div style="
+          width:72px;height:72px;border-radius:22px;
+          background:var(--green-dim);color:var(--green);
+          border:1px solid var(--green-line);
+          display:inline-flex;align-items:center;justify-content:center;
+          margin-bottom:20px;
+        ">${IC.clipboard(32)}</div>
+        <div style="font-size:20px;font-weight:700;color:var(--t0);letter-spacing:-0.02em;margin-bottom:8px">
+          Nenhuma ficha criada
+        </div>
+        <div style="font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:24px">
+          Crie sua primeira rotina de treino.<br>Adicione dias, exercícios e séries.
+        </div>
+        <button class="btn bp lg" onclick="App.newFicha()">
+          ${IC.plus(16)} Criar primeira ficha
+        </button>
       </div>
     `;
     return;
@@ -952,7 +973,26 @@ renderStats(){
   const sess=DB.sessoes(), pesos=DB.pesos();
   const root=$('stats-content');
   if(!sess.length&&!pesos.length){
-    root.innerHTML=`<div class="empty"><div class="empty-ico">${IC.trendUp(28)}</div><div class="et">Sem dados ainda</div><div class="es">Registre treinos e pesagens<br>para ver suas estatísticas.</div></div>`;
+    root.innerHTML=`
+      <div style="text-align:center;padding:48px 24px 32px">
+        <div style="
+          width:72px;height:72px;border-radius:22px;
+          background:var(--cool-dim);color:var(--cool);
+          border:1px solid rgba(107,168,255,0.25);
+          display:inline-flex;align-items:center;justify-content:center;
+          margin-bottom:20px;
+        ">${IC.trendUp(32)}</div>
+        <div style="font-size:20px;font-weight:700;color:var(--t0);letter-spacing:-0.02em;margin-bottom:8px">
+          Sem dados ainda
+        </div>
+        <div style="font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:24px">
+          Complete seu primeiro treino para<br>ver suas estatísticas e evolução.
+        </div>
+        <button class="btn bg lg" onclick="App.nav('home')">
+          ${IC.play(16)} Ir para o início
+        </button>
+      </div>
+    `;
     return;
   }
   const now=new Date();
@@ -1079,7 +1119,7 @@ renderStats(){
         ${weekCounts.map((v,i)=>{
           const h=(v/maxWC)*100, cur=i===weekCounts.length-1;
           return `<div class="bar-col ${cur?'cur':''}">
-            <div class="bar" style="height:${Math.max(h,v?8:2)}%;"></div>
+            <div class="bar" style="height:${Math.max(h,v?8:2)}%;transform:scaleY(0);transform-origin:bottom;transition:transform 0.45s cubic-bezier(0.25,1,0.5,1) ${i*40}ms"></div>
             <div class="blabel">${i===0?'-7w':i===weekCounts.length-1?'agora':''}</div>
           </div>`;
         }).join('')}
@@ -1111,15 +1151,33 @@ renderStats(){
     <div class="eyebrow" style="margin:18px 0 10px">Personal records · maior carga</div>
     <div class="card" style="padding:8px 16px">
       ${prs.map(([n,w],i)=>{
-        const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':'';
-        return `<div class="prow" style="border-bottom:${i<prs.length-1?'1px solid var(--line)':'none'}">
-          <div class="pday" style="width:24px;flex-shrink:0">
-            <div style="font-size:14px">${medal||`<span style="font-family:var(--mono);font-size:11px;color:var(--t2)">${i+1}</span>`}</div>
-          </div>
-          <div class="pdata" style="flex:1;min-width:0">
+        const medals = [
+          {bg:'linear-gradient(135deg,#FFD700,#FFA500)',shadow:'rgba(255,180,0,0.35)',label:'#7A4F00'},
+          {bg:'linear-gradient(135deg,#E0E0E0,#A0A0A0)',shadow:'rgba(160,160,160,0.3)',label:'#444'},
+          {bg:'linear-gradient(135deg,#CD7F32,#A0522D)',shadow:'rgba(160,100,50,0.3)',label:'#5C2E00'},
+        ];
+        const m = medals[i];
+        const badge = m
+          ? `<div style="
+              width:28px;height:28px;border-radius:8px;flex-shrink:0;
+              background:${m.bg};
+              box-shadow:0 2px 8px ${m.shadow};
+              display:flex;align-items:center;justify-content:center;
+              font-size:13px;font-weight:800;color:${m.label};
+              font-variant-numeric:tabular-nums;
+            ">${i+1}</div>`
+          : `<div style="
+              width:28px;height:28px;border-radius:8px;flex-shrink:0;
+              background:var(--bg-3);border:1px solid var(--line-2);
+              display:flex;align-items:center;justify-content:center;
+              font-family:var(--mono);font-size:11px;color:var(--t2);font-weight:700;
+            ">${i+1}</div>`;
+        return `<div class="prow" style="border-bottom:${i<prs.length-1?'1px solid var(--line)':'none'};display:flex;align-items:center;gap:10px;padding:10px 0">
+          ${badge}
+          <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:600;color:var(--t0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(n)}</div>
           </div>
-          <div style="font-family:var(--mono);font-weight:700;font-size:16px;color:var(--t0);flex-shrink:0">
+          <div style="font-family:var(--mono);font-weight:800;font-size:17px;color:var(--t0);flex-shrink:0;font-variant-numeric:tabular-nums">
             ${w}<small style="font-size:11px;color:var(--t2);font-weight:500;margin-left:2px">kg</small>
           </div>
         </div>`;
@@ -1195,6 +1253,10 @@ renderStats(){
       const op={...CDO,scales:{...CDO.scales,y:{...CDO.scales.y,beginAtZero:false}}};
       S.charts.pe=new Chart($('ch-pe'),{type:'line',data:{labels:lp.map(p=>fd(p.date)),datasets:[{data:lp.map(p=>p.w),borderColor:ACCENT,backgroundColor:'rgba(31,224,122,0.08)',fill:true,tension:0.35,pointRadius:3,pointBackgroundColor:ACCENT,borderWidth:2}]},options:op});
     }
+    // Anima barras de frequência (scaleY: 0 → 1)
+    document.querySelectorAll('.bar-chart .bar').forEach(b=>{
+      b.style.transform='scaleY(1)';
+    });
   },50);
 },
 
@@ -1862,8 +1924,34 @@ renderAW(forceRebuild=false){
 
 updSet(ei,si,f,v){
   S.workout.exs[ei].sets[si][f]=+v;
-  // [CACHE-WO] Persiste imediatamente ao alterar carga/reps
   WorkoutCache.save();
+
+  // Pulso verde no input de carga quando supera o histórico
+  if(f==='w'){
+    const ex = S.workout.exs[ei];
+    const hist = ex.lastLoads||[];
+    const histMax = hist.length ? Math.max(...hist) : 0;
+    if(histMax>0 && +v>histMax){
+      // Encontra o input específico e aplica o pulso
+      const cards = document.querySelectorAll('.ex-card');
+      const card  = cards[ei];
+      if(card){
+        const inp = card.querySelectorAll('.set-row')[si]?.querySelector('input[type="number"]:first-of-type');
+        if(inp){
+          inp.style.transition='none';
+          inp.style.background='var(--green-dim)';
+          inp.style.borderColor='var(--green-line)';
+          inp.style.color='var(--green)';
+          setTimeout(()=>{
+            inp.style.transition='background .6s ease, border-color .6s ease, color .6s ease';
+            inp.style.background='';
+            inp.style.borderColor='';
+            inp.style.color='';
+          },80);
+        }
+      }
+    }
+  }
 },
 
 togSet(ei,si){
@@ -2613,20 +2701,58 @@ boot(){
         animation: mslide .38s cubic-bezier(0.25,1,0.5,1) !important;
         will-change: transform;
       }
-      /* Overlay de fundo: fade mais lento que o sheet para não competir */
       @keyframes mfade{
         from{ opacity:0; }
         to{   opacity:1; }
       }
       .mo{ animation: mfade .25s ease !important; }
 
-      /* ── Feedback tátil nos cards — spring no release ── */
+      /* ── Feedback tátil nos cards ── */
       .card, .fc, .wi, .sc, .ex-card, .lb-row {
         transition: transform 0.18s cubic-bezier(0.34,1.56,0.64,1) !important;
       }
       .card:active, .fc:active, .wi:active, .sc:active {
         transform: scale(0.977) !important;
         transition: transform 0.08s ease !important;
+      }
+
+      /* ── Navbar: pill colorido na aba ativa ── */
+      .ni {
+        border-radius: 14px;
+        padding: 6px 10px !important;
+        transition: background 0.18s ease, color 0.18s ease !important;
+        position: relative;
+      }
+      .ni.active {
+        background: var(--green-dim) !important;
+        color: var(--green) !important;
+      }
+      .ni.active svg { stroke: var(--green) !important; }
+      .ni.active .ni-label { color: var(--green) !important; }
+      /* Remove o ::before separator — visualmente conflita com o pill */
+      .ni + .ni::before { display: none !important; }
+
+      /* ── Eyebrow com ponto decorativo ── */
+      .eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .eyebrow::before {
+        content: '';
+        display: inline-block;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--green);
+        opacity: 0.7;
+        flex-shrink: 0;
+      }
+
+      /* ── Números tabulares — mais legíveis ── */
+      .sv, .num, .h1, #tdisplay {
+        font-variant-numeric: tabular-nums !important;
+        font-weight: 800 !important;
       }
     `;
     document.head.appendChild(s);

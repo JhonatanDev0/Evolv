@@ -23,7 +23,7 @@
 //  → Na próxima vez que o usuário abrir o app, o banner aparece
 // ─────────────────────────────────────────────────────────────────
 
-const CACHE_NAME = 'evolv-v1.6.2';
+const CACHE_NAME = 'evolv-v1.7.0';
 
 // Arquivos que serão cacheados no install para funcionamento offline
 const PRECACHE = [
