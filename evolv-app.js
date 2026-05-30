@@ -1857,64 +1857,62 @@ initUpdateSystem(){
 },
 
 _showUpdateBanner(worker){
-  // Evita duplicar o banner
   if(document.getElementById('update-banner')) return;
 
   const banner = document.createElement('div');
   banner.id = 'update-banner';
   banner.innerHTML = `
+    <div id="update-overlay" style="
+      position:fixed;inset:0;
+      background:rgba(8,9,12,0.55);
+      backdrop-filter:blur(6px);
+      -webkit-backdrop-filter:blur(6px);
+      z-index:94;
+      animation:mfade .3s ease;
+    "></div>
     <div style="
-      position:fixed;top:calc(var(--hdr-h) + var(--st) + 10px);
+      position:fixed;top:calc(var(--hdr-h) + var(--st) + 14px);
       left:14px;right:14px;
       background:var(--bg-2);
-      border:1px solid var(--cool-dim);
-      border-top:2px solid var(--cool);
-      border-radius:16px;
-      padding:14px 16px;
+      border:1px solid var(--green-line);
+      border-top:2px solid var(--green);
+      border-radius:18px;
+      padding:16px;
       z-index:95;
-      box-shadow:0 8px 32px rgba(0,0,0,0.5);
-      animation:fadeUp .3s cubic-bezier(0.22,0.95,0.32,1);
+      box-shadow:0 12px 40px rgba(0,0,0,0.6), var(--green-glow);
+      animation:fadeUp .32s cubic-bezier(0.22,0.95,0.32,1);
     ">
-      <div style="display:flex;align-items:center;gap:12px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
         <div style="
-          width:38px;height:38px;border-radius:11px;flex-shrink:0;
-          background:var(--cool-dim);color:var(--cool);
+          width:42px;height:42px;border-radius:13px;flex-shrink:0;
+          background:var(--green-dim);color:var(--green);
+          border:1px solid var(--green-line);
           display:flex;align-items:center;justify-content:center;
-        ">${IC.sync(18)}</div>
+        ">${IC.sync(20)}</div>
         <div style="flex:1;min-width:0">
-          <div style="font-size:13.5px;font-weight:700;color:var(--t0)">
+          <div style="font-size:14px;font-weight:700;color:var(--t0);letter-spacing:-0.01em">
             Nova versão disponível
           </div>
-          <div style="font-size:12px;color:var(--t2);margin-top:2px">
+          <div style="font-size:12px;color:var(--t2);margin-top:3px">
             Atualize para obter melhorias e correções
           </div>
         </div>
-        <button id="update-dismiss" style="
-          width:28px;height:28px;border-radius:8px;flex-shrink:0;
-          background:var(--bg-3);color:var(--t2);border:1px solid var(--line);
-          display:flex;align-items:center;justify-content:center;cursor:pointer;
-        ">${IC.close(13)}</button>
       </div>
-      <div style="display:flex;gap:8px;margin-top:12px">
+      <div style="display:flex;gap:8px">
         <button id="update-later" class="btn bg sm" style="flex:1">
           Depois
         </button>
-        <button id="update-now" class="btn sm" style="
-          flex:2;
-          background:linear-gradient(180deg,var(--cool) 0%,#4d8fe8 100%);
-          color:#fff;
-          box-shadow:0 6px 18px -8px rgba(107,168,255,0.6);
-        ">
+        <button id="update-now" class="btn bp sm" style="flex:2">
           ${IC.sync(13)} Atualizar agora
         </button>
       </div>
     </div>
   `;
   document.body.appendChild(banner);
+  document.body.appendChild(banner);
 
   // Atualizar agora: envia mensagem para o SW fazer skipWaiting
   document.getElementById('update-now').addEventListener('click', () => {
-    // Avisa se há treino em andamento antes de recarregar
     if(S.workout.on){
       App.showConfirmDialog({
         title: 'Atualizar durante treino',
@@ -1929,13 +1927,8 @@ _showUpdateBanner(worker){
     }
   });
 
-  // Depois: remove o banner e não pergunta novamente nessa sessão
+  // Depois: remove banner + overlay
   document.getElementById('update-later').addEventListener('click', () => {
-    banner.remove();
-  });
-
-  // Fechar (X): igual ao "Depois"
-  document.getElementById('update-dismiss').addEventListener('click', () => {
     banner.remove();
   });
 },
@@ -2037,67 +2030,22 @@ toast(msg){
 };
 
 // ─── PWA ─────────────────────────────────────────────────────────
-if('serviceWorker' in navigator){
-  // [UPDATE] SW atualizado: versão v16, listener de SKIP_WAITING para
-  // permitir que a página force a ativação do novo worker sem esperar
-  // todas as abas fecharem. Quando a página envia {type:'SKIP_WAITING'},
-  // o SW chama skipWaiting() e dispara o evento 'controllerchange'
-  // na página, que então recarrega automaticamente.
-  const sw=`
-const C='evolv-v16';
-
-self.addEventListener('install', e => {
-  // Não chama skipWaiting aqui — deixa a página decidir o momento certo.
-  // Isso evita que uma atualização recarregue o app no meio de um treino.
-  self.skipWaiting = self.skipWaiting; // mantém referência
-});
-
-self.addEventListener('activate', e => {
-  e.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(
-        keys.filter(k => k !== C && k.startsWith('evolv-')).map(k => caches.delete(k))
-      ))
-      .then(() => clients.claim())
-  );
-});
-
-self.addEventListener('fetch', e => {
-  if(!e.request.url.startsWith('http')) return;
-  e.respondWith(
-    fetch(e.request)
-      .then(res => {
-        const copy = res.clone();
-        caches.open(C).then(c => c.put(e.request, copy));
-        return res;
-      })
-      .catch(() =>
-        caches.open(C)
-          .then(c => c.match(e.request))
-          .then(r => r || new Response('', {status:503}))
-      )
-  );
-});
-
-// [UPDATE] Recebe mensagem da página para forçar ativação imediata
-self.addEventListener('message', e => {
-  if(e.data && e.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-});
-
-self.addEventListener('notificationclick', e => {
-  e.notification.close();
-  e.waitUntil(
-    clients.matchAll({type:'window'}).then(cs => {
-      for(const c of cs){ if(c.url && 'focus' in c) return c.focus(); }
-      if(clients.openWindow) return clients.openWindow('./');
-    })
-  );
-});
-`;
+// ─── PWA — Service Worker ────────────────────────────────────────
+// O SW é um arquivo físico (sw.js) e não um Blob inline.
+// Isso é OBRIGATÓRIO para o sistema de atualização funcionar:
+// o browser só detecta "nova versão disponível" quando consegue
+// comparar o conteúdo do sw.js entre duas requisições HTTP.
+// Com Blob URLs isso é impossível — cada registro gera uma URL
+// única e o browser nunca sabe se é o mesmo SW ou um novo.
+//
+// PARA PUBLICAR UMA ATUALIZAÇÃO DO APP:
+//  1. Incremente CACHE_NAME em sw.js  (ex: evolv-v16 → evolv-v17)
+//  2. Suba sw.js junto com os demais arquivos alterados
+//  3. O banner "Nova versão disponível" aparece automaticamente
+// ─────────────────────────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
   navigator.serviceWorker
-    .register(URL.createObjectURL(new Blob([sw], {type:'application/javascript'})))
+    .register('./sw.js')
     .catch(() => {});
 }
 (()=>{
