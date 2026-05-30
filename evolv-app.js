@@ -393,12 +393,31 @@ const ACCENT='#1FE07A', ACCENT_2='#15B863', COOL='#6BA8FF', HEAT='#FF8A3B';
 const App = {
 
 nav(p){
-  S.page=p;
-  document.querySelectorAll('.page').forEach(el=>el.classList.remove('active'));
+  const prev = S.page;
+  S.page = p;
+
   document.querySelectorAll('.ni').forEach(el=>el.classList.remove('active'));
-  $('pg-'+p).classList.add('active');
   document.querySelector(`[data-p="${p}"]`)?.classList.add('active');
+
+  const incoming = $('pg-' + p);
+  const outgoing = prev && prev !== p ? $('pg-' + prev) : null;
+
+  // Renderiza conteúdo antes de animar
   App.renderPage(p);
+
+  // Fade-in na página que entra
+  incoming.style.opacity = '0';
+  incoming.style.transition = 'none';
+  incoming.offsetHeight; // reflow
+
+  document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
+  incoming.classList.add('active');
+
+  incoming.style.transition = 'opacity 0.18s ease';
+  incoming.style.opacity = '1';
+
+  // Limpa o estilo inline após a transição
+  setTimeout(() => { incoming.style.cssText = ''; }, 200);
 },
 
 renderPage(p){
@@ -530,6 +549,26 @@ renderHome(){
     </div>`;
   }).join('');
 
+  const srow_html = `
+    <div class="srow">
+      <div class="sc">
+        <div class="sl">Semana</div>
+        <div class="sv" data-count="${weekDone}">${weekDone}<small>/${weekTarget}</small></div>
+        <div class="ss">treinos</div>
+      </div>
+      <div class="sc">
+        <div class="sl" style="color:var(--heat)">Carga média</div>
+        <div class="sv" data-count="${avgLoad}">${avgLoad}<small>kg</small></div>
+        <div class="ss">${wk.length?'por série':'sem dados'}</div>
+      </div>
+      <div class="sc">
+        <div class="sl" style="color:var(--cool)">Streak</div>
+        <div class="sv" data-count="${streak}">${streak}<small>d</small></div>
+        <div class="ss">${streak>0?'ativo':'—'}</div>
+      </div>
+    </div>
+  `;
+
   $('pg-home').innerHTML = `
     <div class="hero">
       <div class="hg">${ico}<span>${txt}</span></div>
@@ -539,23 +578,7 @@ renderHome(){
         ${IC.play(14)}<span>Iniciar treino</span>
       </button>
     </div>
-    <div class="srow">
-      <div class="sc">
-        <div class="sl">Semana</div>
-        <div class="sv">${weekDone}<small>/${weekTarget}</small></div>
-        <div class="ss">treinos</div>
-      </div>
-      <div class="sc">
-        <div class="sl" style="color:var(--heat)">Carga média</div>
-        <div class="sv">${avgLoad}<small>kg</small></div>
-        <div class="ss">${wk.length?'por série':'sem dados'}</div>
-      </div>
-      <div class="sc">
-        <div class="sl" style="color:var(--cool)">Streak</div>
-        <div class="sv">${streak}<small>d</small></div>
-        <div class="ss">${streak>0?'ativo':'—'}</div>
-      </div>
-    </div>
+    ${srow_html}
     <div class="card">
       <div class="between" style="margin-bottom:12px">
         <div class="eyebrow">Esta semana</div>
@@ -583,6 +606,23 @@ renderHome(){
     </div>
     <div>${recentHtml}</div>
   `;
+
+  // Contador animado nos cards de stats (0 → valor em ~600ms)
+  requestAnimationFrame(() => {
+    $('pg-home').querySelectorAll('.sv[data-count]').forEach(el => {
+      const target = +el.dataset.count;
+      if(!target) return;
+      const suffix = el.innerHTML.match(/<small>.*<\/small>/)?.[0] || '';
+      const dur = 600, start = performance.now();
+      const tick = (now) => {
+        const t = Math.min(1, (now - start) / dur);
+        const ease = 1 - Math.pow(1 - t, 3); // cubic ease-out
+        el.innerHTML = Math.round(ease * target) + suffix;
+        if(t < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  });
 },
 
 // ─── META SEMANAL ─────────────────────────────────────────────────
@@ -1769,6 +1809,14 @@ renderAW(forceRebuild=false){
         if(wasDone !== s.done){
           chk.classList.toggle('done',s.done);
           chk.innerHTML=s.done?IC.check(16):'';
+          // Micro-bounce ao marcar a série
+          if(s.done){
+            chk.style.transform='scale(0)';
+            chk.style.transition='none';
+            chk.offsetHeight; // reflow
+            chk.style.transition='transform 0.22s cubic-bezier(0.34,1.56,0.64,1)';
+            chk.style.transform='scale(1)';
+          }
           // Atualiza opacidade dos inputs da linha sem recriar
           const row=card.querySelectorAll('.set-row')[si]; if(!row) return;
           row.querySelectorAll('input').forEach(inp=>inp.style.opacity=s.done?'0.45':'');
@@ -2302,22 +2350,30 @@ checkWorkoutCache(){
   `;
   document.body.appendChild(banner);
 
+  // Helper: anima banner para baixo e remove
+  const dismissBanner = (el, cb) => {
+    const inner = el.querySelector('div');
+    if(inner){
+      inner.style.transition = 'transform 0.28s cubic-bezier(0.4,0,1,1), opacity 0.22s ease';
+      inner.style.transform  = 'translateY(calc(100% + 20px))';
+      inner.style.opacity    = '0';
+    }
+    setTimeout(() => { el.remove(); cb && cb(); }, 300);
+  };
+
   // Retomar treino
   document.getElementById('wo-recovery-resume').addEventListener('click', () => {
-    banner.remove();
-    App._restoreWorkoutFromCache(cache, ficha, day);
+    dismissBanner(banner, () => App._restoreWorkoutFromCache(cache, ficha, day));
   });
 
   // Descartar cache
   document.getElementById('wo-recovery-discard').addEventListener('click', () => {
-    WorkoutCache.clear();
-    banner.remove();
-    App.toast('Treino descartado.');
+    dismissBanner(banner, () => { WorkoutCache.clear(); App.toast('Treino descartado.'); });
   });
 
   // Fechar banner (mantém cache para próxima vez)
   document.getElementById('wo-recovery-dismiss').addEventListener('click', () => {
-    banner.remove();
+    dismissBanner(banner);
   });
 },
 
@@ -2472,9 +2528,21 @@ _showUpdateBanner(worker){
     }
   });
 
-  // Depois: remove banner + overlay
+  // Depois: anima banner para cima e overlay some
   document.getElementById('update-later').addEventListener('click', () => {
-    banner.remove();
+    const inner = banner.querySelector('div:last-child');
+    const overlay = document.getElementById('update-overlay');
+    const dur = '0.32s cubic-bezier(0.4,0,1,1)';
+    if(inner){
+      inner.style.transition = `transform ${dur}, opacity 0.24s ease`;
+      inner.style.transform  = 'translateY(-120%)';
+      inner.style.opacity    = '0';
+    }
+    if(overlay){
+      overlay.style.transition = 'opacity 0.28s ease';
+      overlay.style.opacity    = '0';
+    }
+    setTimeout(() => banner.remove(), 380);
   });
 },
 
@@ -2551,6 +2619,15 @@ boot(){
         to{   opacity:1; }
       }
       .mo{ animation: mfade .25s ease !important; }
+
+      /* ── Feedback tátil nos cards — spring no release ── */
+      .card, .fc, .wi, .sc, .ex-card, .lb-row {
+        transition: transform 0.18s cubic-bezier(0.34,1.56,0.64,1) !important;
+      }
+      .card:active, .fc:active, .wi:active, .sc:active {
+        transform: scale(0.977) !important;
+        transition: transform 0.08s ease !important;
+      }
     `;
     document.head.appendChild(s);
   }
