@@ -1963,7 +1963,6 @@ async _endWO(save){
   clearInterval(S.workout.iv);
   App.resetTimer();
   App.resetSeries();
-  // [CACHE-WO] Limpa o cache sempre que o treino termina (salvo ou descartado)
   WorkoutCache.clear();
   if(save){
     try{
@@ -2410,7 +2409,6 @@ _showUpdateBanner(worker){
     </div>
   `;
   document.body.appendChild(banner);
-  document.body.appendChild(banner);
 
   // Atualizar agora: envia mensagem para o SW fazer skipWaiting
   document.getElementById('update-now').addEventListener('click', () => {
@@ -2444,6 +2442,9 @@ boot(){
   App.updateDot();
   try{App.sound.init();}catch{}
 
+  // [THEME] Aplica tema salvo antes de qualquer render
+  App._applyTheme(DB.getPref('theme', 'dark'));
+
   document.addEventListener('click',e=>{
     try{ if(!App.sound.enabled)return; const btn=e.target.closest('button,.ni,.icon-btn'); if(btn)App.sound.play('click'); }catch{}
   },{capture:false});
@@ -2454,7 +2455,6 @@ boot(){
   document.addEventListener('visibilitychange', App._onVisibilityChange);
 
   // [CACHE-WO] Verifica treino interrompido após o DB estar pronto
-  // (pequeno delay para garantir que o DOM da home já está renderizado)
   setTimeout(() => App.checkWorkoutCache(), 600);
 
   // [UPDATE] Inicia sistema de detecção de atualizações do SW
@@ -2462,6 +2462,11 @@ boot(){
 
   // [SWIPE] Ativa gesto pull-to-dismiss em todos os modais
   App._initSwipeObserver();
+
+  // [ONBOARDING] Exibe boas-vindas se for a primeira vez
+  if(!DB.getPref('onboarded', false)){
+    setTimeout(() => App.showOnboarding(), 400);
+  }
 
   // CSS de animação do sino
   if(!document.getElementById('evolv-notif-styles')){
@@ -2499,6 +2504,397 @@ updateDot(){
     dot.style.cursor=on?'pointer':'default';
     dot.onclick=on?()=>App.showSyncModal():null;
   }
+},
+
+// ═══════════════════════════════════════════════════════════════
+// ONBOARDING
+// ═══════════════════════════════════════════════════════════════
+showOnboarding(force=false){
+  // Pula automaticamente se o usuário já tem dados (sync de outro dispositivo)
+  // mas respeita o flag force para testes via console
+  if(!force && (DB.fichas().length || DB.sessoes().length)){
+    DB.setPref('onboarded', true);
+    return;
+  }
+
+  const steps = [
+    {
+      icon: IC.clipboard(28),
+      color: 'var(--green)',
+      dim: 'var(--green-dim)',
+      line: 'var(--green-line)',
+      title: 'Crie sua ficha',
+      desc: 'Vá em <strong>Fichas</strong> e crie sua primeira rotina de treino. Adicione os dias, exercícios, séries e repetições.',
+    },
+    {
+      icon: IC.play(28),
+      color: 'var(--cool)',
+      dim: 'var(--cool-dim)',
+      line: 'rgba(107,168,255,0.32)',
+      title: 'Inicie o treino',
+      desc: 'Na <strong>Home</strong>, toque em "Iniciar treino" ou selecione um dia diretamente na ficha para começar a sessão.',
+    },
+    {
+      icon: IC.activity(28),
+      color: 'var(--violet)',
+      dim: 'var(--violet-dim)',
+      line: 'rgba(181,131,255,0.32)',
+      title: 'Marque as séries',
+      desc: 'Durante o treino, registre a carga e toque no <strong>✓</strong> ao completar cada série. O timer inicia automaticamente.',
+    },
+    {
+      icon: IC.trendUp(28),
+      color: 'var(--heat)',
+      dim: 'var(--heat-dim)',
+      line: 'rgba(255,138,59,0.32)',
+      title: 'Acompanhe a evolução',
+      desc: 'Em <strong>Stats</strong> veja sua frequência, personal records e exercícios mais praticados. Em <strong>Peso</strong>, registre suas pesagens.',
+    },
+  ];
+
+  let step = 0;
+
+  // Detecta tema ativo para adaptar as cores do overlay
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  const overlayBg    = isLight ? 'rgba(241,243,245,0.97)' : 'rgba(8,9,12,0.95)';
+  const textPrimary  = isLight ? '#0D0F12' : '#F5F6F8';
+  const textSecond   = isLight ? 'rgba(13,15,18,0.60)' : 'rgba(245,246,248,0.55)';
+  const dotInactive  = isLight ? '#DEE2E6' : 'rgba(245,246,248,0.15)';
+  const btnSkipBg    = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.08)';
+  const btnSkipColor = isLight ? 'rgba(13,15,18,0.55)' : 'rgba(245,246,248,0.55)';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'onboarding-overlay';
+  overlay.style.cssText = `
+    position:fixed;inset:0;z-index:400;
+    background:${overlayBg};
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:32px 24px;animation:mfade .3s ease;
+  `;
+
+  document.body.appendChild(overlay);
+
+  const finish = () => {
+    overlay.remove();
+    DB.setPref('onboarded', true);
+    App.nav('fichas');
+  };
+  const skip = () => {
+    overlay.remove();
+    DB.setPref('onboarded', true);
+  };
+
+  const render = () => {
+    const s = steps[step];
+    const isLast = step === steps.length - 1;
+    overlay.innerHTML = `
+      <div style="width:100%;max-width:320px;text-align:center">
+
+        <!-- Ícone do step -->
+        <div style="
+          width:80px;height:80px;border-radius:24px;
+          background:${s.dim};color:${s.color};
+          border:1.5px solid ${s.line};
+          display:inline-flex;align-items:center;justify-content:center;
+          margin-bottom:28px;
+        ">${s.icon.replace('20','32').replace('20','32')}</div>
+
+        <!-- Título -->
+        <div style="
+          font-size:24px;font-weight:700;
+          color:${textPrimary};
+          letter-spacing:-0.025em;line-height:1.1;
+          margin-bottom:12px;
+        ">${s.title}</div>
+
+        <!-- Descrição -->
+        <div style="
+          font-size:14px;color:${textSecond};
+          line-height:1.65;margin-bottom:36px;
+        ">${s.desc}</div>
+
+        <!-- Dots -->
+        <div style="display:flex;justify-content:center;gap:6px;margin-bottom:28px">
+          ${steps.map((_,i)=>`<div style="
+            width:${i===step?22:6}px;height:6px;border-radius:999px;
+            background:${i===step?s.color:dotInactive};
+            transition:width .25s,background .25s;
+          "></div>`).join('')}
+        </div>
+
+        <!-- Botão principal -->
+        <button id="ob-next" style="
+          width:100%;height:52px;border-radius:16px;border:none;cursor:pointer;
+          background:linear-gradient(160deg,${s.color},${s.color === 'var(--green)' ? 'var(--green-2)' : s.color});
+          color:${s.color === 'var(--green)' ? '#06140C' : '#fff'};
+          font-family:var(--font);font-size:15px;font-weight:700;
+          display:flex;align-items:center;justify-content:center;gap:8px;
+          margin-bottom:12px;
+          box-shadow:0 8px 24px -8px ${s.color === 'var(--green)' ? 'rgba(31,224,122,0.5)' : 'rgba(0,0,0,0.2)'};
+        ">
+          ${isLast?`${IC.check(16)} Começar agora`:`Próximo ${IC.chevronRight(16)}`}
+        </button>
+
+        <!-- Botões secundários -->
+        <div style="display:flex;gap:8px">
+          ${step>0?`
+            <button id="ob-back" style="
+              flex:1;height:42px;border-radius:12px;cursor:pointer;
+              background:${btnSkipBg};border:none;
+              color:${btnSkipColor};font-family:var(--font);font-size:13px;font-weight:600;
+            ">Voltar</button>
+          `:''}
+          ${step===0?`
+            <button id="ob-skip" style="
+              flex:1;height:42px;border-radius:12px;cursor:pointer;
+              background:none;border:none;
+              color:${btnSkipColor};font-family:var(--font);font-size:13px;font-weight:500;
+            ">Pular</button>
+          `:''}
+        </div>
+      </div>
+    `;
+
+    overlay.querySelector('#ob-next').addEventListener('click', () => {
+      isLast ? finish() : (step++, render());
+    });
+    overlay.querySelector('#ob-back')?.addEventListener('click', () => { step--; render(); });
+    overlay.querySelector('#ob-skip')?.addEventListener('click', skip);
+  };
+
+  render();
+},
+
+// ═══════════════════════════════════════════════════════════════
+// TEMA CLARO / ESCURO
+// ═══════════════════════════════════════════════════════════════
+_applyTheme(theme){
+  const root = document.documentElement;
+
+  // Injeta o bloco de CSS do tema claro uma única vez
+  if(!document.getElementById('evolv-light-theme')){
+    const s = document.createElement('style');
+    s.id = 'evolv-light-theme';
+    s.textContent = `
+      /* ── Tema claro — sobrescreve hardcodes do CSS base ── */
+      [data-theme="light"] {
+        color-scheme: light;
+        background: #FFFFFF;
+      }
+
+      /* Body e html */
+      [data-theme="light"] html,
+      [data-theme="light"] body {
+        background: #F1F3F5;
+      }
+
+      /* Inputs e selects — remove color-scheme dark */
+      [data-theme="light"] input,
+      [data-theme="light"] select,
+      [data-theme="light"] textarea {
+        color-scheme: light;
+        background: #E9ECEF;
+        border-color: rgba(0,0,0,0.10);
+        color: #0D0F12;
+      }
+      [data-theme="light"] input:focus,
+      [data-theme="light"] select:focus,
+      [data-theme="light"] textarea:focus {
+        background: #E9ECEF;
+        border-color: rgba(31,224,122,0.5);
+      }
+
+      /* Header */
+      [data-theme="light"] #hdr {
+        background: #FFFFFF;
+        border-bottom-color: rgba(0,0,0,0.06);
+      }
+
+      /* Navbar */
+      [data-theme="light"] #nav {
+        background: rgba(255,255,255,0.96) !important;
+        border-color: rgba(0,0,0,0.10) !important;
+        box-shadow: 0 -8px 24px rgba(0,0,0,0.08) !important;
+      }
+      [data-theme="light"] .ni { color: rgba(13,15,18,0.4); }
+      [data-theme="light"] .ni.active { color: #0D0F12; }
+
+      /* Hero da home — gradiente claro */
+      [data-theme="light"] .hero {
+        background:
+          radial-gradient(120% 100% at 0% 0%, rgba(31,224,122,0.14) 0%, transparent 55%),
+          linear-gradient(160deg, #F1F3F5 0%, #FFFFFF 100%);
+        border-color: rgba(0,0,0,0.08);
+      }
+      [data-theme="light"] .hero::after {
+        background: radial-gradient(circle, rgba(31,224,122,0.10), transparent 65%);
+      }
+
+      /* Cards */
+      [data-theme="light"] .card {
+        background: #FFFFFF;
+        border-color: rgba(0,0,0,0.06);
+      }
+
+      /* Modais */
+      [data-theme="light"] .mo {
+        background: rgba(0,0,0,0.3);
+      }
+      [data-theme="light"] .md {
+        background: #FFFFFF;
+        border-top-color: rgba(0,0,0,0.08);
+      }
+
+      /* Overlay de treino ativo */
+      [data-theme="light"] #aw,
+      [data-theme="light"] .aw-hdr,
+      [data-theme="light"] .aw-ftr {
+        background: #FFFFFF;
+        border-color: rgba(0,0,0,0.06);
+      }
+      [data-theme="light"] .pbar-wrap { background: #F1F3F5; }
+      [data-theme="light"] .ex-card { background: #F1F3F5; border-color: rgba(0,0,0,0.06); }
+
+      /* Stats cells */
+      [data-theme="light"] .sc { background: #FFFFFF; border-color: rgba(0,0,0,0.06); }
+      [data-theme="light"] .sc .sv { color: #0D0F12; }
+
+      /* Ficha cards */
+      [data-theme="light"] .fc { background: #FFFFFF; border-color: rgba(0,0,0,0.06); }
+      [data-theme="light"] .fc-day { background: #F1F3F5; border-color: rgba(0,0,0,0.06); }
+
+      /* Workout items */
+      [data-theme="light"] .wi { background: #FFFFFF; border-color: rgba(0,0,0,0.06); }
+      [data-theme="light"] .wi:active { background: #F1F3F5; }
+
+      /* Week dots */
+      [data-theme="light"] .wdot { background: #E9ECEF; border-color: rgba(0,0,0,0.08); }
+
+      /* Botões */
+      [data-theme="light"] .bg { border-color: rgba(0,0,0,0.12); color: rgba(13,15,18,0.7); }
+      [data-theme="light"] .bg:hover { background: #F1F3F5; }
+      [data-theme="light"] .bs { background: #F1F3F5; border-color: rgba(0,0,0,0.10); }
+      [data-theme="light"] .icon-btn { background: #F1F3F5; border-color: rgba(0,0,0,0.10); color: rgba(13,15,18,0.6); }
+      [data-theme="light"] .icon-btn:hover { background: #E9ECEF; }
+      [data-theme="light"] .set-chk { background: #E9ECEF; border-color: rgba(0,0,0,0.12); }
+
+      /* Leaderboard rows */
+      [data-theme="light"] .lb-row { background: #FFFFFF; border-color: rgba(0,0,0,0.06); }
+      [data-theme="light"] .lb-bar { background: #E9ECEF; }
+
+      /* DB builder */
+      [data-theme="light"] .db { background: #F1F3F5; border-color: rgba(0,0,0,0.06); }
+
+      /* Barras de progresso */
+      [data-theme="light"] .prog-track { background: #E9ECEF; }
+      [data-theme="light"] .bar-col .bar { background: #E9ECEF; border-color: rgba(0,0,0,0.06); }
+
+      /* Toast */
+      [data-theme="light"] .toast {
+        background: #FFFFFF;
+        border-color: rgba(0,0,0,0.10);
+        color: #0D0F12;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      }
+
+      /* Status dot */
+      [data-theme="light"] .status-dot {
+        box-shadow: 0 0 8px rgba(31,224,122,0.5);
+      }
+
+      /* Chart.js tooltip — override inline style injetado pelo Chart.js */
+      [data-theme="light"] .chartjs-tooltip {
+        background: #FFFFFF !important;
+        color: #0D0F12 !important;
+      }
+
+      /* Loading */
+      [data-theme="light"] #loading {
+        background: radial-gradient(circle at top, rgba(31,224,122,0.06), transparent 42%), #FFFFFF;
+      }
+
+      /* Peso history rows */
+      [data-theme="light"] .prow { border-bottom-color: rgba(0,0,0,0.06); }
+
+      /* Barra de progresso de peso */
+      [data-theme="light"] .peso-goal-bar { background: #E9ECEF; border-color: rgba(0,0,0,0.08); }
+
+      /* Timer ring glow */
+      [data-theme="light"] .tring-wrap::before {
+        background: radial-gradient(circle, rgba(31,224,122,0.08), transparent 65%);
+      }
+
+      /* Preset buttons do timer */
+      [data-theme="light"] .tp {
+        background: #E9ECEF;
+        border-color: rgba(0,0,0,0.10);
+        color: rgba(13,15,18,0.7);
+      }
+      [data-theme="light"] .tp.on {
+        background: var(--green-dim);
+        border-color: var(--green-line);
+        color: var(--green);
+      }
+
+      /* Segmented control */
+      [data-theme="light"] .seg { background: #F1F3F5; border-color: rgba(0,0,0,0.08); }
+      [data-theme="light"] .seg-btn.on { background: #FFFFFF; color: #0D0F12; }
+
+      /* Empty states */
+      [data-theme="light"] .empty-ico { background: #F1F3F5; border-color: rgba(0,0,0,0.06); }
+
+      /* AW resume pill */
+      [data-theme="light"] .aw-resume {
+        background: rgba(255,255,255,0.96);
+        border-color: rgba(0,0,0,0.10);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.10);
+      }
+
+      /* Notif badge */
+      [data-theme="light"] .notify-badge {
+        box-shadow: 0 0 0 2px #FFFFFF;
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  // Aplica/remove variáveis e atributo
+  if(theme === 'light'){
+    root.style.setProperty('--bg-0','#F8F9FA');
+    root.style.setProperty('--bg-1','#FFFFFF');
+    root.style.setProperty('--bg-2','#F1F3F5');
+    root.style.setProperty('--bg-3','#E9ECEF');
+    root.style.setProperty('--bg-4','#DEE2E6');
+    root.style.setProperty('--line','rgba(0,0,0,0.06)');
+    root.style.setProperty('--line-2','rgba(0,0,0,0.10)');
+    root.style.setProperty('--line-3','rgba(0,0,0,0.16)');
+    root.style.setProperty('--t0','#0D0F12');
+    root.style.setProperty('--t1','rgba(13,15,18,0.72)');
+    root.style.setProperty('--t2','rgba(13,15,18,0.48)');
+    root.style.setProperty('--t3','rgba(13,15,18,0.28)');
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content','#FFFFFF');
+    const ico = document.getElementById('theme-ico');
+    if(ico) ico.innerHTML='<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>';
+  } else {
+    ['--bg-0','--bg-1','--bg-2','--bg-3','--bg-4',
+     '--line','--line-2','--line-3',
+     '--t0','--t1','--t2','--t3'].forEach(v=>root.style.removeProperty(v));
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content','#0E1015');
+    const ico = document.getElementById('theme-ico');
+    if(ico) ico.innerHTML='<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>';
+  }
+  root.setAttribute('data-theme', theme);
+
+  // Re-renderiza a página atual para atualizar cores inline dos charts
+  if(typeof S !== 'undefined' && S.page) App.renderPage(S.page);
+},
+
+toggleTheme(){
+  const current = DB.getPref('theme','dark');
+  const next = current === 'dark' ? 'light' : 'dark';
+  DB.setPref('theme', next);
+  App._applyTheme(next);
+  App.toast(next === 'light' ? 'Tema claro ativado' : 'Tema escuro ativado');
 },
 
 showReconnectModal(){
