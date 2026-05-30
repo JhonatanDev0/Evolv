@@ -2099,6 +2099,9 @@ boot(){
   // [UPDATE] Inicia sistema de detecção de atualizações do SW
   App.initUpdateSystem();
 
+  // [SWIPE] Ativa gesto pull-to-dismiss em todos os modais
+  App._initSwipeObserver();
+
   // CSS de animação do sino
   if(!document.getElementById('evolv-notif-styles')){
     const s=document.createElement('style');
@@ -2160,6 +2163,122 @@ showReconnectModal(){
 },
 
 closeModal(){ document.querySelectorAll('.mo').forEach(m=>m.remove()); },
+
+// ─── SWIPE TO DISMISS ────────────────────────────────────────────
+// Aplica o gesto de arrastar para baixo em qualquer .md (sheet modal)
+// dentro de #mroot. Centralizado via MutationObserver — funciona
+// automaticamente em todos os modais existentes e futuros sem
+// precisar tocar em cada um individualmente.
+//
+// Comportamento:
+//  - Arrasto < 80px  → volta ao lugar com spring (transition)
+//  - Arrasto ≥ 80px  → dismiss com animação de saída
+//  - Velocidade > 400px/s → dismiss imediato (flick)
+//  - Scroll vertical dentro do .md não é confundido com swipe
+_attachSwipeToDismiss(md){
+  if(md._swipeAttached) return;
+  md._swipeAttached = true;
+
+  const THRESHOLD  = 80;    // px para dismiss
+  const VELOCITY   = 0.4;   // px/ms para flick
+  const mo = md.closest('.mo');
+
+  let startY=0, startX=0, curY=0, t0=0, dragging=false, scrollLocked=false;
+
+  const onStart = e => {
+    const touch = e.touches?.[0] || e;
+    startY  = touch.clientY;
+    startX  = touch.clientX;
+    curY    = 0;
+    t0      = Date.now();
+    dragging    = false;
+    scrollLocked = false;
+    md.style.transition = 'none';
+  };
+
+  const onMove = e => {
+    const touch = e.touches?.[0] || e;
+    const dy = touch.clientY - startY;
+    const dx = touch.clientX - startX;
+
+    // Determina intenção apenas uma vez por gesto
+    if(!dragging && !scrollLocked){
+      if(Math.abs(dy) < 6 && Math.abs(dx) < 6) return; // ainda indeciso
+      if(Math.abs(dx) > Math.abs(dy)){
+        scrollLocked = true; // gesto horizontal → ignora
+        return;
+      }
+      if(dy < 0){
+        scrollLocked = true; // arrastar para cima → scroll normal
+        return;
+      }
+      // Verifica se o elemento que iniciou o toque ainda tem scroll a dar
+      const target = e.target.closest('[style*="overflow"],[class*="scroll"],.md');
+      if(target && target !== md){
+        const { scrollTop } = target;
+        if(scrollTop > 0){ scrollLocked = true; return; }
+      }
+      dragging = true;
+    }
+
+    if(!dragging) return;
+    e.preventDefault();
+
+    curY = Math.max(0, dy); // só para baixo
+    // Resistência suave quando além do threshold
+    const effective = curY > THRESHOLD
+      ? THRESHOLD + (curY - THRESHOLD) * 0.3
+      : curY;
+    md.style.transform = `translateY(${effective}px)`;
+    // Fade no overlay proporcional ao arrasto
+    if(mo) mo.style.background = `rgba(0,0,0,${0.6 * Math.max(0, 1 - curY / 260)})`;
+  };
+
+  const onEnd = () => {
+    if(!dragging){ md.style.transition=''; md.style.transform=''; return; }
+    const elapsed = Date.now() - t0;
+    const velocity = curY / elapsed; // px/ms
+
+    if(curY >= THRESHOLD || velocity >= VELOCITY){
+      // Dismiss com animação de saída
+      md.style.transition = 'transform .22s cubic-bezier(0.32,0,0.67,0)';
+      md.style.transform  = `translateY(105%)`;
+      if(mo){ mo.style.transition='background .22s'; mo.style.background='rgba(0,0,0,0)'; }
+      setTimeout(()=>App.closeModal(), 220);
+    } else {
+      // Volta com spring
+      md.style.transition = 'transform .35s cubic-bezier(0.34,1.56,0.64,1)';
+      md.style.transform  = 'translateY(0)';
+      if(mo){ mo.style.transition='background .35s'; mo.style.background=''; }
+    }
+    dragging = false;
+  };
+
+  // Touch (mobile)
+  md.addEventListener('touchstart', onStart, {passive:true});
+  md.addEventListener('touchmove',  onMove,  {passive:false});
+  md.addEventListener('touchend',   onEnd,   {passive:true});
+  md.addEventListener('touchcancel',onEnd,   {passive:true});
+},
+
+// Inicializa o observer — chamado no boot
+_initSwipeObserver(){
+  const root = document.getElementById('mroot');
+  if(!root) return;
+  const obs = new MutationObserver(mutations => {
+    mutations.forEach(m => {
+      m.addedNodes.forEach(node => {
+        if(node.nodeType !== 1) return;
+        // Aplica ao .md diretamente adicionado ou a filhos .md
+        const mds = node.classList?.contains('md')
+          ? [node]
+          : [...node.querySelectorAll('.md')];
+        mds.forEach(md => App._attachSwipeToDismiss(md));
+      });
+    });
+  });
+  obs.observe(root, {childList:true, subtree:true});
+},
 
 toast(msg){
   document.querySelectorAll('.toast').forEach(t=>t.remove());
