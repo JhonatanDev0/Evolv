@@ -4010,7 +4010,26 @@ showReconnectModal(){
   $('mroot').appendChild(m);
 },
 
-closeModal(){ document.querySelectorAll('.mo').forEach(m=>m.remove()); },
+closeModal(){
+  document.querySelectorAll('.mo').forEach(mo=>{
+    if(mo._closing) return;
+    mo._closing = true;
+    const md = mo.querySelector('.md');
+    if(!md){ mo.remove(); return; }
+    // Se o swipe já iniciou a saída, só aguarda e remove
+    const ty = md.style.transform;
+    if(ty && ty !== 'translateY(0px)' && ty !== 'translateY(0)' && ty !== ''){
+      setTimeout(()=>mo.remove(), 260);
+      return;
+    }
+    // Anima sheet para baixo + overlay some
+    md.style.transition = 'transform 0.28s cubic-bezier(0.4,0,1,1)';
+    md.style.transform  = 'translateY(105%)';
+    mo.style.transition = 'opacity 0.22s ease';
+    mo.style.opacity    = '0';
+    setTimeout(()=>mo.remove(), 300);
+  });
+},
 
 // ─── SWIPE TO DISMISS ────────────────────────────────────────────
 // Aplica o gesto de arrastar para baixo em qualquer .md (sheet modal)
