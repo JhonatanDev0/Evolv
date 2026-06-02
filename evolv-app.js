@@ -580,7 +580,18 @@ const fd=d=>{
   if(!d) return '—';
   return new Date(d+(d.length===10?'T12:00':'')).toLocaleDateString('pt-BR',{day:'2-digit',month:'short'});
 };
-const today=()=>new Date().toISOString().slice(0,10);
+// Retorna a data LOCAL de hoje no formato YYYY-MM-DD (sem conversão UTC)
+const today=()=>{
+  const n=new Date();
+  return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`;
+};
+// Converte qualquer ISO string para data LOCAL no formato YYYY-MM-DD
+// Evita o bug de fuso: "2026-06-01T03:00:00.000Z".slice(0,10) = "2026-05-31" (UTC-3)
+const localDate=(iso)=>{
+  if(!iso) return '';
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
 const relTime=(iso)=>{
   if(!iso) return '';
   const diff=(Date.now()-new Date(iso).getTime())/86400000;
@@ -716,11 +727,11 @@ renderHome(){
     ? Math.round(sessWithDur.reduce((a,s)=>a+s.dur,0)/sessWithDur.length/60)
     : 0;
 
-  const sessDays = new Set(sess.map(s=>s.date.slice(0,10)));
+  const sessDays = new Set(sess.map(s=>localDate(s.date)));
   let streak = 0;
   for(let i=0;i<60;i++){
     const d=new Date(now); d.setDate(now.getDate()-i);
-    const k=d.toISOString().slice(0,10);
+    const k=localDate(d.toISOString());
     if(sessDays.has(k)) streak++;
     else if(i>0) break;
   }
@@ -762,10 +773,10 @@ renderHome(){
 
   const dayLabels=['D','S','T','Q','Q','S','S'];
   const weekTarget = DB.getPref('weekTarget', 5);
-  const weekDone   = new Set(wk.map(s=>s.date.slice(0,10))).size;
+  const weekDone   = new Set(wk.map(s=>localDate(s.date))).size;
   const weekDots = Array.from({length:7}).map((_,i)=>{
     const d=new Date(now); d.setDate(now.getDate()-(6-i));
-    const k=d.toISOString().slice(0,10);
+    const k=localDate(d.toISOString());
     const done = sessDays.has(k); const isToday = i===6; const dow = d.getDay();
     return `<div class="wk-day">
       <div class="wd">${dayLabels[dow]}</div>
@@ -1224,13 +1235,13 @@ renderStats(){
 
   // ── Frequência ────────────────────────────────────────────────
   const total = sess.length;
-  const sessDays = new Set(sess.map(s=>s.date.slice(0,10)));
+  const sessDays = new Set(sess.map(s=>localDate(s.date)));
 
   // Treinos últimos 30 dias
   const mo30 = sess.filter(s=>(now-new Date(s.date))/864e5<=30);
 
   // Consistência %: dias treinados / 30
-  const consistency = Math.round((new Set(mo30.map(s=>s.date.slice(0,10))).size / 30) * 100);
+  const consistency = Math.round((new Set(mo30.map(s=>localDate(s.date))).size / 30) * 100);
 
   // Frequência semanal média (últimas 8 semanas)
   const weekCounts = [];
@@ -1448,7 +1459,7 @@ renderStats(){
         const durMin=Math.round((s.dur||0)/60);
         const sets=(s.exs||[]).reduce((a,e)=>a+(e.sets||[]).filter(x=>x.done).length,0);
         const exCount=(s.exs||[]).length;
-        const dateLabel=fd(s.date.slice(0,10));
+        const dateLabel=fd(localDate(s.date));
         const color=S.fichaColors[fichas.indexOf(f)%S.fichaColors.length]||'var(--green)';
         return `<div class="prow" style="padding:12px 16px;border-bottom:${i<arr.length-1?'1px solid var(--line)':'none'}">
           <div style="flex:1;min-width:0">
@@ -1950,7 +1961,7 @@ exportSessionsCsv(){
     const series  = (s.exs||[]).reduce((a,e)=>a+(e.sets||[]).filter(x=>x.done).length, 0);
     const volume  = (s.exs||[]).reduce((a,e)=>a+(e.sets||[]).filter(x=>x.done).reduce((b,x)=>b+(+x.reps||0)*(+x.w||0),0), 0);
     rows.push([
-      s.date.slice(0,10),
+      localDate(s.date),
       f?.name||'—',
       d?.name||'—',
       durMin||'—',
@@ -2613,135 +2624,205 @@ _showWorkoutResult(sessao, snapshot){
   const d = f?.days?.[sessao.dayIdx];
   const nome = d?.name || f?.name || 'Treino';
 
-  // Métricas
-  const durMin = Math.round((sessao.dur||0)/60);
-  const durSec = (sessao.dur||0) % 60;
-  const durStr = durMin > 0
-    ? `${durMin}<small>${durSec>0?' '+durSec+'s':'min'}</small>`
-    : `${durSec}<small>s</small>`;
+  // ── Métricas ─────────────────────────────────────────────────
+  const durTot  = sessao.dur || 0;
+  const durMin  = Math.floor(durTot / 60);
+  const durSec  = durTot % 60;
+  const durStr  = durMin > 0 ? `${durMin}min${durSec > 0 ? ' ' + durSec + 's' : ''}` : `${durSec}s`;
 
   const exsDone   = (sessao.exs||[]).filter(e=>(e.sets||[]).some(s=>s.done));
   const totalSets = exsDone.reduce((a,e)=>a+(e.sets||[]).filter(s=>s.done).length, 0);
   const totalVol  = exsDone.reduce((a,e)=>a+(e.sets||[]).filter(s=>s.done).reduce((b,s)=>b+(+s.reps||0)*(+s.w||0),0), 0);
-  const volVal    = totalVol>=1000 ? (totalVol/1000).toFixed(1) : totalVol;
-  const volUnit   = totalVol>=1000 ? 't' : 'kg';
+  const volStr    = totalVol >= 1000 ? (totalVol/1000).toFixed(1)+'t' : totalVol+'kg';
 
-  // PRs batidos
+  // ── PRs ──────────────────────────────────────────────────────
   const prs = [];
   exsDone.forEach(e=>{
-    const done   = (e.sets||[]).filter(s=>s.done && +s.w>0);
-    const maxW   = done.length ? Math.max(...done.map(s=>+s.w)) : 0;
+    const done = (e.sets||[]).filter(s=>s.done && +s.w>0);
+    if(!done.length) return;
+    const maxW   = Math.max(...done.map(s=>+s.w));
     const snapEx = snapshot.exs.find(x=>x.name===e.name);
-    const prevMax= snapEx?.lastLoads?.filter(v=>v>0).length
+    const prevMax = snapEx?.lastLoads?.filter(v=>v>0).length
       ? Math.max(...snapEx.lastLoads.filter(v=>v>0)) : 0;
-    if(maxW>0 && maxW>prevMax) prs.push({name:e.name, w:maxW, prev:prevMax});
+    if(maxW > prevMax) prs.push({name: e.name, w: maxW, prev: prevMax});
   });
 
-  // Linhas de exercícios usando classe .wi nativa
+  // ── Exercícios ───────────────────────────────────────────────
   const exRows = exsDone.map((e,i)=>{
     const done   = (e.sets||[]).filter(s=>s.done);
     const maxW   = done.length ? Math.max(...done.map(s=>+s.w||0)) : 0;
     const vol    = done.reduce((a,s)=>a+(+s.reps||0)*(+s.w||0), 0);
     const snapEx = snapshot.exs.find(x=>x.name===e.name);
-    const prevMax= snapEx?.lastLoads?.filter(v=>v>0).length
+    const prevMax = snapEx?.lastLoads?.filter(v=>v>0).length
       ? Math.max(...snapEx.lastLoads.filter(v=>v>0)) : 0;
-    const isPR   = maxW>0 && maxW>prevMax;
+    const isPR   = maxW > 0 && maxW > prevMax;
     const color  = S.fichaColors[i % S.fichaColors.length];
-    const tag    = String.fromCharCode(65+i);
-    const volStr = vol>=1000 ? (vol/1000).toFixed(1)+'t' : vol>0 ? vol+'kg' : '';
-    return `<div class="wi">
-      <div class="wi-ico" style="background:color-mix(in oklab,${color} 14%,transparent);color:${color};border-color:color-mix(in oklab,${color} 32%,transparent)">${tag}</div>
-      <div class="wi-info">
-        <div class="wi-name" style="display:flex;align-items:center;gap:6px">
-          ${esc(e.name)}
-          ${isPR?`<span style="font-size:9px;font-weight:700;color:var(--green);background:var(--green-dim);border:1px solid var(--green-line);border-radius:5px;padding:1px 5px;letter-spacing:.05em;flex-shrink:0">PR</span>`:''}
+    const volStr = vol >= 1000 ? (vol/1000).toFixed(1)+'t' : vol > 0 ? vol+'kg' : '—';
+
+    return `
+      <div style="
+        display:flex;align-items:center;gap:12px;
+        padding:12px 0;
+        border-bottom:1px solid var(--line);
+      ">
+        <!-- Ícone letra -->
+        <div style="
+          width:38px;height:38px;border-radius:11px;flex-shrink:0;
+          background:color-mix(in oklab,${color} 14%,transparent);
+          color:${color};
+          border:1px solid color-mix(in oklab,${color} 32%,transparent);
+          display:flex;align-items:center;justify-content:center;
+          font-size:13px;font-weight:700;
+        ">${String.fromCharCode(65+i)}</div>
+        <!-- Nome + detalhe -->
+        <div style="flex:1;min-width:0">
+          <div style="
+            font-size:13.5px;font-weight:600;color:var(--t0);
+            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+            display:flex;align-items:center;gap:6px;
+          ">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.name)}</span>
+            ${isPR ? `<span style="
+              flex-shrink:0;font-size:9px;font-weight:700;letter-spacing:.05em;
+              color:var(--green);background:var(--green-dim);
+              border:1px solid var(--green-line);border-radius:5px;padding:1px 5px;
+            ">PR</span>` : ''}
+          </div>
+          <div style="font-size:11.5px;color:var(--t2);margin-top:2px">
+            ${done.length} séries${maxW > 0 ? ' · ' + maxW + 'kg' : ''}
+          </div>
         </div>
-        <div class="wi-sub">${done.length} séries${maxW>0?' · max '+maxW+'kg':''}</div>
-      </div>
-      ${volStr?`<div class="wi-right"><div class="num">${volStr}</div><div class="meta">volume</div></div>`:''}
-    </div>`;
+        <!-- Volume -->
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:var(--t0)">${volStr}</div>
+          <div style="font-size:10px;color:var(--t2);margin-top:1px">volume</div>
+        </div>
+      </div>`;
   });
 
+  // ── Overlay ──────────────────────────────────────────────────
   const overlay = document.createElement('div');
   overlay.id = 'workout-result';
   overlay.style.cssText = `
     position:fixed;inset:0;z-index:300;
     background:var(--bg-0);
-    display:flex;flex-direction:column;
     overflow-y:auto;-webkit-overflow-scrolling:touch;
     transform:translateY(100%);
     transition:transform 0.42s cubic-bezier(0.25,1,0.5,1);
   `;
 
   overlay.innerHTML = `
+
+    <!-- ── Hero ────────────────────────────────────────── -->
     <div style="
-      position:sticky;top:0;z-index:2;
-      display:flex;align-items:center;justify-content:space-between;
-      padding:14px 20px 13px;
-      background:var(--bg-0);
-      border-bottom:1px solid var(--line);
+      padding:52px 24px 32px;
+      text-align:center;
+      background:radial-gradient(ellipse 100% 80% at 50% 0%,
+        color-mix(in oklab, var(--green) 12%, transparent), transparent 70%);
+      position:relative;overflow:hidden;
     ">
-      <div style="font-size:12px;font-weight:600;color:var(--t2);letter-spacing:.06em;text-transform:uppercase">Resumo do treino</div>
-      <button onclick="App._closeWorkoutResult()" class="icon-btn">${IC.close(16)}</button>
-    </div>
-
-    <div class="hero" style="border-radius:0;margin:0;overflow:hidden;position:relative">
-      <svg style="position:absolute;inset:0;width:100%;height:100%;opacity:.045;pointer-events:none" viewBox="0 0 360 200" preserveAspectRatio="xMidYMid slice">
-        ${Array.from({length:6},(_,row)=>Array.from({length:12},(_,col)=>`<circle cx="${col*34+8}" cy="${row*28+8}" r="1.5" fill="currentColor"/>`).join('')).join('')}
-        <polyline points="0,160 40,140 80,150 120,110 160,120 200,90 240,100 280,70 320,80 360,50" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <!-- Padrão de fundo -->
+      <svg style="position:absolute;inset:0;width:100%;height:100%;opacity:.04;pointer-events:none" viewBox="0 0 360 240" preserveAspectRatio="xMidYMid slice">
+        ${Array.from({length:7},(_,row)=>Array.from({length:11},(_,col)=>`<circle cx="${col*36+10}" cy="${row*36+10}" r="1.8" fill="currentColor"/>`).join('')).join('')}
       </svg>
-      <div class="hg">${IC.trophy(14)}<span>Treino concluído!</span></div>
-      <div class="ht">${esc(nome)}</div>
+      <!-- Botão fechar -->
+      <button onclick="App._closeWorkoutResult()" style="
+        position:absolute;top:14px;right:16px;
+        width:32px;height:32px;border-radius:10px;
+        background:var(--bg-3);border:1px solid var(--line-2);
+        display:flex;align-items:center;justify-content:center;
+        color:var(--t2);cursor:pointer;
+      ">${IC.close(15)}</button>
+      <!-- Ícone -->
+      <div style="
+        width:64px;height:64px;border-radius:20px;
+        background:var(--green-dim);color:var(--green);
+        border:1.5px solid var(--green-line);
+        display:inline-flex;align-items:center;justify-content:center;
+        margin-bottom:16px;
+        box-shadow:0 8px 24px -8px color-mix(in oklab,var(--green) 40%,transparent);
+      ">${IC.trophy(28)}</div>
+      <div style="font-size:24px;font-weight:800;color:var(--t0);letter-spacing:-0.03em;line-height:1.1;margin-bottom:6px">
+        Treino concluído!
+      </div>
+      <div style="font-size:14px;color:var(--t2)">${esc(nome)}</div>
     </div>
 
-    <div class="srow">
-      <div class="sc">
-        <div class="sl">Duração</div>
-        <div class="sv">${durStr}</div>
-        <div class="ss">tempo total</div>
-      </div>
-      <div class="sc">
-        <div class="sl">Séries</div>
-        <div class="sv">${totalSets}</div>
-        <div class="ss">completadas</div>
-      </div>
-      <div class="sc">
-        <div class="sl" style="color:var(--heat)">Volume</div>
-        <div class="sv" style="color:var(--heat)">${volVal}<small>${volUnit}</small></div>
-        <div class="ss">total</div>
-      </div>
-    </div>
-
-    ${prs.length ? `
-    <div class="between" style="padding:18px 2px 8px">
-      <div class="eyebrow">Personal records</div>
-    </div>
-    <div>
-      ${prs.map(pr=>`
-        <div class="wi">
-          <div class="wi-ico" style="background:var(--green-dim);color:var(--green);border-color:var(--green-line)">${IC.trendUp(16)}</div>
-          <div class="wi-info">
-            <div class="wi-name">${esc(pr.name)}</div>
-            <div class="wi-sub">${pr.prev>0?'anterior: '+pr.prev+'kg':'primeira carga registrada'}</div>
-          </div>
-          <div class="wi-right">
-            <div class="num" style="color:var(--green)">${pr.w}kg</div>
-            <div class="meta">novo PR</div>
-          </div>
+    <!-- ── Métricas ─────────────────────────────────────── -->
+    <div style="
+      display:grid;grid-template-columns:repeat(3,1fr);
+      gap:10px;padding:20px 16px 0;
+    ">
+      ${[
+        {label:'Duração',  value:durStr,           sub:'tempo total', color:'var(--t0)'},
+        {label:'Séries',   value:totalSets,         sub:'completadas', color:'var(--t0)'},
+        {label:'Volume',   value:volStr,            sub:'total',       color:'var(--heat)'},
+      ].map(m=>`
+        <div style="
+          background:var(--bg-2);border:1px solid var(--line-2);
+          border-radius:14px;padding:14px 10px;text-align:center;
+        ">
+          <div style="font-size:11px;font-weight:600;color:var(--t2);letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px">${m.label}</div>
+          <div style="font-family:var(--mono);font-size:20px;font-weight:800;color:${m.color};font-variant-numeric:tabular-nums;line-height:1">${m.value}</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:4px">${m.sub}</div>
         </div>
       `).join('')}
+    </div>
+
+    <!-- ── PRs ──────────────────────────────────────────── -->
+    ${prs.length ? `
+    <div style="padding:24px 16px 0">
+      <div style="font-size:11px;font-weight:600;color:var(--t2);letter-spacing:.07em;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+        <span style="width:5px;height:5px;border-radius:50%;background:var(--green);display:inline-block"></span>
+        Personal records
+      </div>
+      <div style="background:var(--bg-2);border:1px solid var(--line-2);border-radius:16px;overflow:hidden">
+        ${prs.map((pr,i)=>`
+          <div style="
+            display:flex;align-items:center;gap:12px;
+            padding:13px 16px;
+            ${i < prs.length-1 ? 'border-bottom:1px solid var(--line)' : ''}
+          ">
+            <div style="
+              width:36px;height:36px;border-radius:10px;flex-shrink:0;
+              background:var(--green-dim);color:var(--green);
+              border:1px solid var(--green-line);
+              display:flex;align-items:center;justify-content:center;
+            ">${IC.trendUp(15)}</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:600;color:var(--t0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(pr.name)}</div>
+              <div style="font-size:11px;color:var(--t2);margin-top:2px">${pr.prev > 0 ? 'anterior: '+pr.prev+'kg' : 'primeira carga registrada'}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-family:var(--mono);font-size:16px;font-weight:800;color:var(--green)">${pr.w}kg</div>
+              <div style="font-size:10px;color:var(--t2);margin-top:1px">novo PR</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
     </div>` : ''}
 
-    <div class="between" style="padding:18px 2px 8px">
-      <div class="eyebrow">Exercícios</div>
+    <!-- ── Exercícios ───────────────────────────────────── -->
+    <div style="padding:24px 16px 0">
+      <div style="font-size:11px;font-weight:600;color:var(--t2);letter-spacing:.07em;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+        <span style="width:5px;height:5px;border-radius:50%;background:var(--green);display:inline-block"></span>
+        Exercícios
+      </div>
+      <div style="background:var(--bg-2);border:1px solid var(--line-2);border-radius:16px;overflow:hidden;padding:0 16px">
+        ${exRows.map((r,i)=>i===exRows.length-1
+          ? r.replace('border-bottom:1px solid var(--line)', 'border-bottom:none')
+          : r
+        ).join('')}
+      </div>
     </div>
-    <div>${exRows.join('')}</div>
 
-    <div style="padding:20px 0 48px">
+    <!-- ── Botão ─────────────────────────────────────────── -->
+    <div style="padding:24px 16px 56px">
       <button class="btn bp lg" onclick="App._closeWorkoutResult()">
         ${IC.check(16)} Fechar
       </button>
     </div>
+
   `;
 
   document.body.appendChild(overlay);
