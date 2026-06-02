@@ -997,7 +997,7 @@ renderFichas(){
       <div class="fc-stats">
         <div class="fc-stat"><div class="num">${(f.days||[]).length}</div><div class="lbl">dias</div></div>
         <div class="fc-divider"></div>
-        <div class="fc-stat"><div class="num">${avgVol>=1000?(avgVol/1000).toFixed(1)+'t':Math.round(avgVol)+'kg'}</div><div class="lbl">volume médio</div></div>
+        <div class="fc-stat"><div class="num">${fSess.length}</div><div class="lbl">sessões</div></div>
         <div class="fc-divider"></div>
         <div class="fc-stat"><div style="font-size:13px;color:var(--t1);font-weight:500">${lastDate?relTime(lastDate):'—'}</div><div class="lbl">última</div></div>
       </div>
@@ -1076,7 +1076,8 @@ startTimer(){
   // Persiste o momento exato em que o timer deve acabar
   const endAt = Date.now() + S.timer.rem * 1000;
   localStorage.setItem('evolv_timer_end', String(endAt));
-
+  
+  App._scheduleTimerPush(S.timer.rem);
   App.setTimerStatus('Contando');
   App.setTimerPlayIcon(true);
 
@@ -1095,12 +1096,25 @@ startTimer(){
   },1000);
 },
 
+_scheduleTimerPush(seconds){
+  if(!navigator.serviceWorker?.controller) return;
+  navigator.serviceWorker.controller.postMessage({
+    type: 'SCHEDULE_TIMER',
+    delay: seconds * 1000,
+    title: 'EVOLV — Timer',
+    body: 'Intervalo encerrado. Próxima série!',
+    tag: 'evolv-timer',
+  });
+},
+
 stopTimer(){
   S.timer.running=false;
   clearInterval(S.timer.iv);
   localStorage.removeItem('evolv_timer_end');
   App.setTimerPlayIcon(false);
   App.setTimerStatus(S.timer.rem>0?'Pausado':'Pronto');
+  if(navigator.serviceWorker?.controller)
+  navigator.serviceWorker.controller.postMessage({type:'CANCEL_TIMER'});  
 },
 
 resetTimer(){
@@ -2398,7 +2412,6 @@ renderAW(forceRebuild=false){
           <input type="number" value="${s.reps||''}" placeholder="${ex.tr}" min="1" onchange="App.updSet(${ei},${si},'reps',this.value)" inputmode="numeric" style="${s.done?'opacity:0.45':''}">
           <div class="set-chk ${s.done?'done':''}" onclick="App.togSet(${ei},${si})">${s.done?IC.check(16):''}</div>
         </div>`).join('')}
-      <button class="btn bg sm" onclick="App.addSet(${ei})" style="width:auto;padding:0 12px;margin-top:6px">${IC.plus(12)} Série</button>
     </div>`;
   }).join('');
 },
@@ -3006,6 +3019,8 @@ clearAllNotifications(){
 },
 
 notify(msg,type='info'){
+  // Notificações de timer não acumulam — substitui a anterior do mesmo tipo
+  if(type==='timer') S.notifications = S.notifications.filter(n=>n.type!=='timer');
   const item={id:uid(),msg,type,date:new Date().toISOString(),read:false};
   S.notifications.unshift(item);
   if(S.notifications.length>50) S.notifications.length=50;

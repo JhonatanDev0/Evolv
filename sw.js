@@ -23,7 +23,7 @@
 //  → Na próxima vez que o usuário abrir o app, o banner aparece
 // ─────────────────────────────────────────────────────────────────
 
-const CACHE_NAME = 'evolv-v1.0.1';
+const CACHE_NAME = 'evolv-v1.0.0';
 
 // Arquivos que serão cacheados no install para funcionamento offline
 const PRECACHE = [
@@ -116,4 +116,29 @@ self.addEventListener('notificationclick', e => {
       if (clients.openWindow) return clients.openWindow('./');
     })
   );
+});
+
+let timerTimeout = null;
+
+self.addEventListener('message', e => {
+  if(e.data?.type === 'SKIP_WAITING'){
+    self.skipWaiting();
+  }
+  if(e.data?.type === 'SCHEDULE_TIMER'){
+    if(timerTimeout) clearTimeout(timerTimeout);
+    timerTimeout = setTimeout(()=>{
+      self.registration.showNotification(e.data.title, {
+        body: e.data.body,
+        icon: './icon.png',
+        badge: './icon.png',
+        tag: e.data.tag,
+        vibrate: [200,80,200,80,400],
+        requireInteraction: false,
+      });
+      timerTimeout = null;
+    }, e.data.delay);
+  }
+  if(e.data?.type === 'CANCEL_TIMER'){
+    if(timerTimeout){ clearTimeout(timerTimeout); timerTimeout = null; }
+  }
 });
