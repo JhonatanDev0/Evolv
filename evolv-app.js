@@ -1010,7 +1010,7 @@ renderFichas(){
       ` : ''}
       <div style="margin-top:14px">
         ${(f.days||[]).map((d,di)=>`
-          <div class="fc-day" onclick="App.startWorkout('${esc(f.id)}',${di})">
+          <div class="fc-day" onclick="App.startWorkoutByIndex(${fi},${di})">
             <div class="dn" style="background:color-mix(in oklab, ${color} 14%, transparent);color:${color}">${di+1}</div>
             <div class="di">
               <div class="dn2">${esc(d.name)}</div>
@@ -2234,7 +2234,7 @@ showPickModal(){
       return `<div style="margin-bottom:16px">
         <div class="eyebrow" style="margin-bottom:8px"><span style="color:${color}">${tag}</span> · ${esc(f.name)}</div>
         ${(f.days||[]).map((d,di)=>`
-          <div class="wi" onclick="App.startWorkout('${esc(f.id)}',${di});App.closeModal()">
+          <div class="wi" onclick="App.startWorkoutByIndex(${fi},${di});App.closeModal()">
             <div class="wi-ico" style="background:color-mix(in oklab, ${color} 14%, transparent);color:${color};border-color:color-mix(in oklab, ${color} 32%, transparent)">${di+1}</div>
             <div class="wi-info"><div class="wi-name">${esc(d.name)}</div><div class="wi-sub">${(d.exs||[]).length} exercícios</div></div>
             <div style="color:var(--green);display:flex">${IC.play(14)}</div>
@@ -2248,8 +2248,16 @@ showPickModal(){
   $('mroot').appendChild(m);
 },
 
-startWorkout(fichaId,dayIdx){
-  const f=DB.fichas().find(x=>x.id===fichaId);
+startWorkoutByIndex(fichaIdx,dayIdx){
+  const f=DB.fichas()[fichaIdx];
+  if(!f)return;
+  App.startWorkout(f.id,dayIdx,f);
+},
+
+startWorkout(fichaId,dayIdx,fichaOverride=null){
+  if(S.workout.iv) clearInterval(S.workout.iv);
+  WorkoutCache.clear();
+  const f=fichaOverride||DB.fichas().find(x=>x.id===fichaId);
   const d=f?.days?.[dayIdx]; if(!d)return;
   App.closeModal();
   App.resetSeries();
@@ -2302,7 +2310,7 @@ startWorkout(fichaId,dayIdx){
     if(el) el.textContent=ft(Math.floor((Date.now()-S.workout.t0)/1000));
     if(Math.floor((Date.now()-S.workout.t0)/1000) % 10 === 0) WorkoutCache.save();
   },1000);
-  App.renderAW();
+  App.renderAW(true);
 },
 
 minimizeWorkout(){
@@ -2610,6 +2618,8 @@ async _endWO(save){
   };
 
   $('aw').classList.remove('open');
+  const body=$('aw-body');
+  if(body) body.innerHTML='';
   S.workout = {on:false, minimized:false, exs:[]};
   App.updateWorkoutResume();
 
