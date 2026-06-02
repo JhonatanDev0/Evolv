@@ -2571,17 +2571,192 @@ async _endWO(save){
   App.resetTimer();
   App.resetSeries();
   WorkoutCache.clear();
+
+  const snapshot = {
+    fichaId: S.workout.fichaId,
+    dayIdx:  S.workout.dayIdx,
+    t0:      S.workout.t0,
+    exs:     S.workout.exs.map(e=>({
+      name:      e.name,
+      sets:      e.sets,
+      lastLoads: e.lastLoads||[],
+    })),
+  };
+
+  $('aw').classList.remove('open');
+  S.workout = {on:false, minimized:false, exs:[]};
+  App.updateWorkoutResume();
+
   if(save){
     try{
-      await DB.addSessao({id:uid(),fichaId:S.workout.fichaId,dayIdx:S.workout.dayIdx,date:new Date().toISOString(),dur:Math.floor((Date.now()-S.workout.t0)/1000),exs:S.workout.exs.map(e=>({name:e.name,sets:e.sets}))});
+      const sessao = {
+        id:      uid(),
+        fichaId: snapshot.fichaId,
+        dayIdx:  snapshot.dayIdx,
+        date:    new Date().toISOString(),
+        dur:     Math.floor((Date.now()-snapshot.t0)/1000),
+        exs:     snapshot.exs.map(e=>({name:e.name, sets:e.sets})),
+      };
+      await DB.addSessao(sessao);
       App.notify('Treino concluído!','workout');
       App._pushNotif('EVOLV — Treino','Treino finalizado. Excelente trabalho!',{tag:'evolv-workout'});
-      App.resetSeries();
-    }catch(e){App.toast('Erro ao salvar treino.');}
+      App._showWorkoutResult(sessao, snapshot);
+    }catch(e){ App.toast('Erro ao salvar treino.'); }
+  } else {
+    if(S.page==='home') App.renderHome();
   }
-  $('aw').classList.remove('open'); S.workout={on:false,minimized:false,exs:[]};
-  App.updateWorkoutResume();
+},
+
+_showWorkoutResult(sessao, snapshot){
+  const fichas = DB.fichas();
+  const f = fichas.find(x=>x.id===sessao.fichaId);
+  const d = f?.days?.[sessao.dayIdx];
+  const nome = d?.name || f?.name || 'Treino';
+
+  // Métricas
+  const durMin = Math.round((sessao.dur||0)/60);
+  const durSec = (sessao.dur||0) % 60;
+  const durStr = durMin > 0
+    ? `${durMin}<small>${durSec>0?' '+durSec+'s':'min'}</small>`
+    : `${durSec}<small>s</small>`;
+
+  const exsDone   = (sessao.exs||[]).filter(e=>(e.sets||[]).some(s=>s.done));
+  const totalSets = exsDone.reduce((a,e)=>a+(e.sets||[]).filter(s=>s.done).length, 0);
+  const totalVol  = exsDone.reduce((a,e)=>a+(e.sets||[]).filter(s=>s.done).reduce((b,s)=>b+(+s.reps||0)*(+s.w||0),0), 0);
+  const volVal    = totalVol>=1000 ? (totalVol/1000).toFixed(1) : totalVol;
+  const volUnit   = totalVol>=1000 ? 't' : 'kg';
+
+  // PRs batidos
+  const prs = [];
+  exsDone.forEach(e=>{
+    const done   = (e.sets||[]).filter(s=>s.done && +s.w>0);
+    const maxW   = done.length ? Math.max(...done.map(s=>+s.w)) : 0;
+    const snapEx = snapshot.exs.find(x=>x.name===e.name);
+    const prevMax= snapEx?.lastLoads?.filter(v=>v>0).length
+      ? Math.max(...snapEx.lastLoads.filter(v=>v>0)) : 0;
+    if(maxW>0 && maxW>prevMax) prs.push({name:e.name, w:maxW, prev:prevMax});
+  });
+
+  // Linhas de exercícios usando classe .wi nativa
+  const exRows = exsDone.map((e,i)=>{
+    const done   = (e.sets||[]).filter(s=>s.done);
+    const maxW   = done.length ? Math.max(...done.map(s=>+s.w||0)) : 0;
+    const vol    = done.reduce((a,s)=>a+(+s.reps||0)*(+s.w||0), 0);
+    const snapEx = snapshot.exs.find(x=>x.name===e.name);
+    const prevMax= snapEx?.lastLoads?.filter(v=>v>0).length
+      ? Math.max(...snapEx.lastLoads.filter(v=>v>0)) : 0;
+    const isPR   = maxW>0 && maxW>prevMax;
+    const color  = S.fichaColors[i % S.fichaColors.length];
+    const tag    = String.fromCharCode(65+i);
+    const volStr = vol>=1000 ? (vol/1000).toFixed(1)+'t' : vol>0 ? vol+'kg' : '';
+    return `<div class="wi">
+      <div class="wi-ico" style="background:color-mix(in oklab,${color} 14%,transparent);color:${color};border-color:color-mix(in oklab,${color} 32%,transparent)">${tag}</div>
+      <div class="wi-info">
+        <div class="wi-name" style="display:flex;align-items:center;gap:6px">
+          ${esc(e.name)}
+          ${isPR?`<span style="font-size:9px;font-weight:700;color:var(--green);background:var(--green-dim);border:1px solid var(--green-line);border-radius:5px;padding:1px 5px;letter-spacing:.05em;flex-shrink:0">PR</span>`:''}
+        </div>
+        <div class="wi-sub">${done.length} séries${maxW>0?' · max '+maxW+'kg':''}</div>
+      </div>
+      ${volStr?`<div class="wi-right"><div class="num">${volStr}</div><div class="meta">volume</div></div>`:''}
+    </div>`;
+  });
+
+  const overlay = document.createElement('div');
+  overlay.id = 'workout-result';
+  overlay.style.cssText = `
+    position:fixed;inset:0;z-index:300;
+    background:var(--bg-0);
+    display:flex;flex-direction:column;
+    overflow-y:auto;-webkit-overflow-scrolling:touch;
+    transform:translateY(100%);
+    transition:transform 0.42s cubic-bezier(0.25,1,0.5,1);
+  `;
+
+  overlay.innerHTML = `
+    <div style="
+      position:sticky;top:0;z-index:2;
+      display:flex;align-items:center;justify-content:space-between;
+      padding:14px 20px 13px;
+      background:var(--bg-0);
+      border-bottom:1px solid var(--line);
+    ">
+      <div style="font-size:12px;font-weight:600;color:var(--t2);letter-spacing:.06em;text-transform:uppercase">Resumo do treino</div>
+      <button onclick="App._closeWorkoutResult()" class="icon-btn">${IC.close(16)}</button>
+    </div>
+
+    <div class="hero" style="border-radius:0;margin:0;overflow:hidden;position:relative">
+      <svg style="position:absolute;inset:0;width:100%;height:100%;opacity:.045;pointer-events:none" viewBox="0 0 360 200" preserveAspectRatio="xMidYMid slice">
+        ${Array.from({length:6},(_,row)=>Array.from({length:12},(_,col)=>`<circle cx="${col*34+8}" cy="${row*28+8}" r="1.5" fill="currentColor"/>`).join('')).join('')}
+        <polyline points="0,160 40,140 80,150 120,110 160,120 200,90 240,100 280,70 320,80 360,50" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div class="hg">${IC.trophy(14)}<span>Treino concluído!</span></div>
+      <div class="ht">${esc(nome)}</div>
+    </div>
+
+    <div class="srow">
+      <div class="sc">
+        <div class="sl">Duração</div>
+        <div class="sv">${durStr}</div>
+        <div class="ss">tempo total</div>
+      </div>
+      <div class="sc">
+        <div class="sl">Séries</div>
+        <div class="sv">${totalSets}</div>
+        <div class="ss">completadas</div>
+      </div>
+      <div class="sc">
+        <div class="sl" style="color:var(--heat)">Volume</div>
+        <div class="sv" style="color:var(--heat)">${volVal}<small>${volUnit}</small></div>
+        <div class="ss">total</div>
+      </div>
+    </div>
+
+    ${prs.length ? `
+    <div class="between" style="padding:18px 2px 8px">
+      <div class="eyebrow">Personal records</div>
+    </div>
+    <div>
+      ${prs.map(pr=>`
+        <div class="wi">
+          <div class="wi-ico" style="background:var(--green-dim);color:var(--green);border-color:var(--green-line)">${IC.trendUp(16)}</div>
+          <div class="wi-info">
+            <div class="wi-name">${esc(pr.name)}</div>
+            <div class="wi-sub">${pr.prev>0?'anterior: '+pr.prev+'kg':'primeira carga registrada'}</div>
+          </div>
+          <div class="wi-right">
+            <div class="num" style="color:var(--green)">${pr.w}kg</div>
+            <div class="meta">novo PR</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>` : ''}
+
+    <div class="between" style="padding:18px 2px 8px">
+      <div class="eyebrow">Exercícios</div>
+    </div>
+    <div>${exRows.join('')}</div>
+
+    <div style="padding:20px 0 48px">
+      <button class="btn bp lg" onclick="App._closeWorkoutResult()">
+        ${IC.check(16)} Fechar
+      </button>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    overlay.style.transform = 'translateY(0)';
+  }));
   if(S.page==='home') App.renderHome();
+},
+
+_closeWorkoutResult(){
+  const overlay = document.getElementById('workout-result');
+  if(!overlay) return;
+  overlay.style.transition = 'transform 0.32s cubic-bezier(0.4,0,1,1)';
+  overlay.style.transform  = 'translateY(100%)';
+  setTimeout(()=>overlay.remove(), 340);
 },
 
 // ─── NOTIFICATIONS ───────────────────────────────────────────────
