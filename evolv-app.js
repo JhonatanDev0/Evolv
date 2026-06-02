@@ -1073,13 +1073,12 @@ startTimer(){
   if(S.timer.rem<=0) S.timer.rem=S.timer.total;
   S.timer.running=true;
 
-  // Persiste o momento exato em que o timer deve acabar
   const endAt = Date.now() + S.timer.rem * 1000;
   localStorage.setItem('evolv_timer_end', String(endAt));
-  
-  App._scheduleTimerPush(S.timer.rem);
+
   App.setTimerStatus('Contando');
   App.setTimerPlayIcon(true);
+  App._scheduleTimerPush(S.timer.rem);
 
   S.timer.iv=setInterval(()=>{
     const rem = Math.max(0, Math.round((+localStorage.getItem('evolv_timer_end') - Date.now()) / 1000));
@@ -1128,12 +1127,12 @@ resetTimer(){
 },
 
 bumpTimer(seconds){
-  // Atualiza tanto o rem quanto o timestamp persistido
   S.timer.rem=Math.max(1,S.timer.rem+seconds);
   S.timer.total=Math.max(S.timer.total,S.timer.rem);
   if(S.timer.running){
     const newEnd = Date.now() + S.timer.rem * 1000;
     localStorage.setItem('evolv_timer_end', String(newEnd));
+    App._scheduleTimerPush(S.timer.rem); // reagenda com o novo tempo
   }
   App.updTimer();
 },

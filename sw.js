@@ -125,7 +125,7 @@ self.addEventListener('message', e => {
     self.skipWaiting();
   }
   if(e.data?.type === 'SCHEDULE_TIMER'){
-    if(timerTimeout) clearTimeout(timerTimeout);
+    if(timerTimeout){ clearTimeout(timerTimeout); timerTimeout = null; }
     timerTimeout = setTimeout(()=>{
       self.registration.showNotification(e.data.title, {
         body: e.data.body,
