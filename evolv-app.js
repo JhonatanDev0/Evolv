@@ -1082,7 +1082,6 @@ startTimer(){
   App.setTimerPlayIcon(true);
 
   S.timer.iv=setInterval(()=>{
-    // Recalcula sempre a partir do timestamp — imune a drift e background
     const rem = Math.max(0, Math.round((+localStorage.getItem('evolv_timer_end') - Date.now()) / 1000));
     S.timer.rem = rem;
     App.updTimer();
@@ -1091,7 +1090,11 @@ startTimer(){
       App.setTimerStatus('Tempo!');
       if(navigator.vibrate) navigator.vibrate([250,100,250,100,250]);
       App.toast('Intervalo finalizado!');
-      App.sendTimerNotification();
+      // Só notifica via página se o SW não foi quem disparou
+      // (visibilityState visible = app estava aberto o tempo todo)
+      if(document.visibilityState === 'visible'){
+        App.sendTimerNotification();
+      }
     }
   },1000);
 },
@@ -1147,7 +1150,7 @@ _onVisibilityChange(){
     App.stopTimer();
     App.setTimerStatus('Tempo!');
     App.toast('Intervalo finalizado!');
-    App.sendTimerNotification();
+    // Não notifica aqui — o SW já disparou enquanto estava em background
   }
 },
 
