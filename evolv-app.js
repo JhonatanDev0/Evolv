@@ -709,6 +709,27 @@ sound:{
 },
 
 // ─── HOME ────────────────────────────────────────────────────────
+getNextWorkoutSuggestion(){
+  const fichas = DB.fichas();
+  const fallbackFicha = fichas.find(f=>(f.days||[]).length) || fichas[0];
+  if(!fallbackFicha) return null;
+
+  const sessoes = DB.sessoes();
+  const last = sessoes
+    .slice()
+    .sort((a,b)=>new Date(b.date||0)-new Date(a.date||0))[0];
+  const lastFicha = last ? fichas.find(f=>f.id===last.fichaId) : null;
+
+  if(lastFicha && (lastFicha.days||[]).length){
+    const lastIdx = Number.isInteger(+last.dayIdx) ? +last.dayIdx : -1;
+    const nextIdx = lastIdx >= 0 ? (lastIdx + 1) % lastFicha.days.length : 0;
+    return { ficha:lastFicha, fichaIdx:fichas.indexOf(lastFicha), day:lastFicha.days[nextIdx], dayIdx:nextIdx };
+  }
+
+  const fallbackIdx = fichas.indexOf(fallbackFicha);
+  return { ficha:fallbackFicha, fichaIdx:fallbackIdx, day:fallbackFicha.days?.[0], dayIdx:0 };
+},
+
 renderHome(){
   const h=new Date().getHours();
   const [ico,txt] = h<12?[IC.sun(14),'Bom dia']:h<18?[IC.zap(14),'Boa tarde']:[IC.moon(14),'Boa noite'];
@@ -736,12 +757,14 @@ renderHome(){
     else if(i>0) break;
   }
 
-  const suggestedFicha = fichas[0];
+  const suggested = App.getNextWorkoutSuggestion();
+  const suggestedFicha = suggested?.ficha;
+  const suggestedDay = suggested?.day;
   const heroTitle = suggestedFicha
-    ? `Pronto para <em>${esc((suggestedFicha.days?.[0]?.name || suggestedFicha.name).slice(0,28))}</em>?`
+    ? `Pronto para <em>${esc((suggestedDay?.name || suggestedFicha.name).slice(0,28))}</em>?`
     : `Sua evolução <em>começa aqui.</em>`;
   const heroMeta = suggestedFicha
-    ? `<span>${IC.layers(14)} ${suggestedFicha.days?.length||0} dias</span><span>${IC.activity(14)} ${(suggestedFicha.days||[]).reduce((a,d)=>a+(d.exs||[]).length,0)} exercícios</span>`
+    ? `<span>${IC.layers(14)} ${suggestedFicha.days?.length||0} dias</span><span>${IC.activity(14)} ${(suggestedDay?.exs||[]).length} exercícios</span>`
     : '';
 
   const recent = sess.slice(-3).reverse();
@@ -2217,6 +2240,11 @@ async importFichasFromJson(raw){
 // ─── ACTIVE WORKOUT ──────────────────────────────────────────────
 startTodayWorkout(){
   if(!DB.fichas().length){App.toast('Crie uma ficha de treino primeiro!');App.nav('fichas');return;}
+  const suggested = App.getNextWorkoutSuggestion();
+  if(suggested?.ficha && suggested?.day && suggested.dayIdx >= 0){
+    App.startWorkout(suggested.ficha.id, suggested.dayIdx, suggested.ficha);
+    return;
+  }
   App.showPickModal();
 },
 
