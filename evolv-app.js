@@ -2455,8 +2455,39 @@ renderAW(forceRebuild=false){
   }).join('');
 },
 
+_syncWorkoutExerciseToFicha(ei, patch){
+  if(!S.workout.on || !S.workout.fichaId) return;
+  const ficha = DB.fichas().find(f=>f.id===S.workout.fichaId);
+  const day = ficha?.days?.[S.workout.dayIdx];
+  const activeEx = S.workout.exs?.[ei];
+  if(!ficha || !day || !activeEx) return;
+
+  const exIdx = (day.exs||[]).findIndex((ex,i)=>i===ei || ex.name===activeEx.name);
+  if(exIdx < 0) return;
+
+  const days = (ficha.days||[]).map((d,di)=>di===S.workout.dayIdx
+    ? {
+        ...d,
+        exs:(d.exs||[]).map((ex,i)=>i===exIdx
+          ? {...ex, ...patch}
+          : ex
+        )
+      }
+    : d
+  );
+
+  DB.updFicha(ficha.id, {days, updAt:Date.now()})
+    .then(()=>{ if(S.page==='fichas') App.renderFichas(); })
+    .catch(()=>{});
+},
+
 updSet(ei,si,f,v){
-  S.workout.exs[ei].sets[si][f]=+v;
+  const n = +v;
+  S.workout.exs[ei].sets[si][f]=n;
+  if(f==='reps' && n>0){
+    S.workout.exs[ei].tr=n;
+    App._syncWorkoutExerciseToFicha(ei, {reps:n});
+  }
   WorkoutCache.save();
 
   // Pulso verde no input de carga quando supera o histórico
@@ -2518,6 +2549,8 @@ togSet(ei,si){
 
 addSet(ei){
   const e=S.workout.exs[ei]; e.sets.push({reps:e.tr,w:0,done:false});
+  e.ts=e.sets.length;
+  App._syncWorkoutExerciseToFicha(ei, {sets:e.sets.length});
   WorkoutCache.save();
   App.renderAW(true);
 },
