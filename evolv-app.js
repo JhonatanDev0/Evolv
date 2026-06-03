@@ -1824,13 +1824,14 @@ editFicha(id){ const f=DB.fichas().find(x=>x.id===id); if(f)App.showAddFicha(f);
 // ─── CONFIRM DIALOG ──────────────────────────────────────────────
 async showConfirmDialog(opts){
   App.closeModal();
-  const {title='Confirmar', message='Tem certeza?', confirmText='Confirmar', cancelText='Cancelar', onConfirm=null, isDangerous=false}=opts;
+  const {title='Confirmar', message='Tem certeza?', confirmText='Confirmar', cancelText='Cancelar', onConfirm=null, isDangerous=false, icon=null, iconStyle=''}=opts;
+  const confirmIcon = icon || (isDangerous ? IC.trash(28) : IC.info(28));
   return new Promise(resolve=>{
     const m=document.createElement('div');m.className='mo';
     m.innerHTML=`<div class="md">
       <div class="mhandle"></div>
       <div class="confirm-content">
-        <div class="confirm-icon">${isDangerous?IC.trash(28):IC.info(28)}</div>
+        <div class="confirm-icon"${iconStyle?` style="${iconStyle}"`:''}>${confirmIcon}</div>
         <div class="confirm-title">${esc(title)}</div>
         <div class="confirm-message">${esc(message)}</div>
       </div>
@@ -2626,7 +2627,18 @@ async cancelWorkout(){
     onConfirm:async()=>{App._endWO(false);}
   });
 },
-finishWorkout(){ App._endWO(true); },
+async finishWorkout(){
+  await App.showConfirmDialog({
+    title:'Finalizar treino',
+    message:'O treino será salvo no histórico e a sessão atual será encerrada. Deseja finalizar agora?',
+    confirmText:'Finalizar treino',
+    cancelText:'Continuar treino',
+    isDangerous:false,
+    icon:IC.check(28),
+    iconStyle:'background:var(--green-dim);color:var(--green);border-color:var(--green-line)',
+    onConfirm:async()=>{App._endWO(true);}
+  });
+},
 
 async _endWO(save){
   clearInterval(S.workout.iv);
