@@ -776,7 +776,7 @@ renderHome(){
         const tag=String.fromCharCode(65+i);
         const color=S.fichaColors[i%S.fichaColors.length];
         const durMin=Math.round((s.dur||0)/60);
-        return `<div class="wi">
+        return `<div class="wi" onclick="App.showSessaoDetail('${esc(s.id)}')" style="cursor:pointer">
           <div class="wi-ico" style="background:color-mix(in oklab, ${color} 14%, transparent);color:${color};border-color:color-mix(in oklab, ${color} 32%, transparent)">${tag}</div>
           <div class="wi-info">
             <div class="wi-name">${esc(d?.name||f?.name||'Treino')}</div>
@@ -1500,7 +1500,7 @@ renderStats(){
         const exCount=(s.exs||[]).length;
         const dateLabel=fd(localDate(s.date));
         const color=S.fichaColors[fichas.indexOf(f)%S.fichaColors.length]||'var(--green)';
-        return `<div class="prow" style="padding:12px 16px;border-bottom:${i<arr.length-1?'1px solid var(--line)':'none'}">
+        return `<div class="prow" onclick="App.showSessaoDetail('${esc(s.id)}')" style="padding:12px 16px;border-bottom:${i<arr.length-1?'1px solid var(--line)':'none'};cursor:pointer">
           <div style="flex:1;min-width:0">
             <div style="font-size:13.5px;font-weight:600;color:var(--t0);
               white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
@@ -1510,7 +1510,7 @@ renderStats(){
               <span>${IC.dumbbell(11)} ${exCount} ex · ${sets} séries</span>
             </div>
           </div>
-          <div class="del" onclick="App.delSessao('${esc(s.id)}')" title="Excluir treino"
+          <div class="del" onclick="event.stopPropagation();App.delSessao('${esc(s.id)}')" title="Excluir treino"
             style="width:32px;height:32px;border-radius:9px;background:var(--red-dim);
               color:var(--red);display:flex;align-items:center;justify-content:center;
               cursor:pointer;flex-shrink:0;margin-left:12px;transition:transform .12s">
@@ -2716,11 +2716,14 @@ async _endWO(save){
   }
 },
 
-_showWorkoutResult(sessao, snapshot){
+_showWorkoutResult(sessao, snapshot, opts={}){
   const fichas = DB.fichas();
   const f = fichas.find(x=>x.id===sessao.fichaId);
   const d = f?.days?.[sessao.dayIdx];
   const nome = d?.name || f?.name || 'Treino';
+  const title = opts.title || 'Treino concluído!';
+  const subtitle = opts.subtitle || nome;
+  const showPrs = opts.showPrs !== false;
 
   // ── Métricas ─────────────────────────────────────────────────
   const durTot  = sessao.dur || 0;
@@ -2735,7 +2738,7 @@ _showWorkoutResult(sessao, snapshot){
 
   // ── PRs ──────────────────────────────────────────────────────
   const prs = [];
-  exsDone.forEach(e=>{
+  if(showPrs) exsDone.forEach(e=>{
     const done = (e.sets||[]).filter(s=>s.done && +s.w>0);
     if(!done.length) return;
     const maxW   = Math.max(...done.map(s=>+s.w));
@@ -2756,10 +2759,20 @@ _showWorkoutResult(sessao, snapshot){
     const isPR   = maxW > 0 && maxW > prevMax;
     const color  = S.fichaColors[i % S.fichaColors.length];
     const volStr = vol >= 1000 ? (vol/1000).toFixed(1)+'t' : vol > 0 ? vol+'kg' : '—';
+    const setDetails = done.map((s,si)=>{
+      const reps = +s.reps||0;
+      const w = +s.w||0;
+      return `<span style="
+        display:inline-flex;align-items:center;gap:4px;
+        font-family:var(--mono);font-size:10.5px;font-weight:650;
+        color:var(--t1);background:var(--bg-3);border:1px solid var(--line);
+        border-radius:7px;padding:3px 7px;
+      ">${si+1}. ${reps || '—'} reps${w>0 ? ' · ' + w + 'kg' : ''}</span>`;
+    }).join('');
 
     return `
       <div style="
-        display:flex;align-items:center;gap:12px;
+        display:flex;align-items:flex-start;gap:12px;
         padding:12px 0;
         border-bottom:1px solid var(--line);
       ">
@@ -2788,6 +2801,9 @@ _showWorkoutResult(sessao, snapshot){
           </div>
           <div style="font-size:11.5px;color:var(--t2);margin-top:2px">
             ${done.length} séries${maxW > 0 ? ' · ' + maxW + 'kg' : ''}
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+            ${setDetails}
           </div>
         </div>
         <!-- Volume -->
@@ -2841,9 +2857,9 @@ _showWorkoutResult(sessao, snapshot){
         box-shadow:0 8px 24px -8px color-mix(in oklab,var(--green) 40%,transparent);
       ">${IC.trophy(28)}</div>
       <div style="font-size:24px;font-weight:800;color:var(--t0);letter-spacing:-0.03em;line-height:1.1;margin-bottom:6px">
-        Treino concluído!
+        ${esc(title)}
       </div>
-      <div style="font-size:14px;color:var(--t2)">${esc(nome)}</div>
+      <div style="font-size:14px;color:var(--t2)">${esc(subtitle)}</div>
     </div>
 
     <!-- ── Métricas ─────────────────────────────────────── -->
@@ -2936,6 +2952,25 @@ _closeWorkoutResult(){
   overlay.style.transition = 'transform 0.32s cubic-bezier(0.4,0,1,1)';
   overlay.style.transform  = 'translateY(100%)';
   setTimeout(()=>overlay.remove(), 340);
+},
+
+showSessaoDetail(id){
+  const sessao = DB.sessoes().find(s=>s.id===id);
+  if(!sessao){ App.toast('Treino não encontrado.'); return; }
+  const ficha = DB.fichas().find(f=>f.id===sessao.fichaId);
+  const dia = ficha?.days?.[sessao.dayIdx];
+  const nome = dia?.name || ficha?.name || 'Treino';
+  const snapshot = {
+    fichaId: sessao.fichaId,
+    dayIdx: sessao.dayIdx,
+    t0: new Date(sessao.date).getTime() - (sessao.dur||0)*1000,
+    exs: (sessao.exs||[]).map(e=>({name:e.name, sets:e.sets||[], lastLoads:[]})),
+  };
+  App._showWorkoutResult(sessao, snapshot, {
+    title:'Detalhes do treino',
+    subtitle:`${nome} · ${fd(localDate(sessao.date))}`,
+    showPrs:false,
+  });
 },
 
 // ─── NOTIFICATIONS ───────────────────────────────────────────────
