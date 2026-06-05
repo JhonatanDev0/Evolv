@@ -1172,7 +1172,9 @@ _onVisibilityChange(){
     App.stopTimer();
     App.setTimerStatus('Tempo!');
     App.toast('Intervalo finalizado!');
-    // Não notifica aqui — o SW já disparou enquanto estava em background
+    // No iOS o SW é suspenso em background e não dispara; notificamos ao retornar ao foreground
+    App._pushNotif('EVOLV — Timer','Intervalo encerrado. Próxima série!',{tag:'evolv-timer',vibrate:[200,80,200,80,400]});
+    App.notify('Intervalo finalizado!','timer');
   }
 },
 
@@ -1199,7 +1201,8 @@ sendTimerNotification(){
 
 _pushNotif(title, body, extra={}){
   if(!('Notification' in window) || Notification.permission!=='granted') return;
-  const opts={body,icon:'icon.png',badge:'icon.png',vibrate:[200,100,200],requireInteraction:false,...extra};
+  const base = location.origin + location.pathname.replace(/[^/]*$/, '');
+  const opts={body,icon:`${base}icon.png`,badge:`${base}icon.png`,vibrate:[200,100,200],requireInteraction:false,...extra};
   if(navigator.serviceWorker?.controller){
     navigator.serviceWorker.ready
       .then(reg=>reg.showNotification(title,opts))

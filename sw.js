@@ -127,10 +127,11 @@ self.addEventListener('message', e => {
   if(e.data?.type === 'SCHEDULE_TIMER'){
     if(timerTimeout){ clearTimeout(timerTimeout); timerTimeout = null; }
     timerTimeout = setTimeout(()=>{
+      const base = self.registration.scope;
       self.registration.showNotification(e.data.title, {
         body: e.data.body,
-        icon: './icon.png',
-        badge: './icon.png',
+        icon: `${base}icon.png`,
+        badge: `${base}icon.png`,
         tag: e.data.tag,
         vibrate: [200,80,200,80,400],
         requireInteraction: false,
